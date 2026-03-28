@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Heart, Coins, Trees, Gem, Hammer, Shield, Home, Users, X, ArrowUpCircle, Wrench, Sword, Timer } from 'lucide-react';
+import { Heart, Coins, Trees, Gem, Hammer, Shield, Home, Users, X, ArrowUpCircle, Wrench } from 'lucide-react';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,8 +13,6 @@ export default function App() {
 
     const WIDTH = canvas.width;
     const HEIGHT = canvas.height;
-    const WORLD_WIDTH = WIDTH * 2;
-    const WORLD_HEIGHT = HEIGHT * 2;
 
     const ui = {
       healthText: document.getElementById('healthText'),
@@ -23,8 +21,6 @@ export default function App() {
       stoneCount: document.getElementById('stoneCount'),
       fiberCount: document.getElementById('fiberCount'),
       goldCount: document.getElementById('goldCount'),
-      waveInfo: document.getElementById('waveInfo'),
-      waveTimer: document.getElementById('waveTimer'),
       dayBadge: document.getElementById('dayBadge'),
       messageBox: document.getElementById('messageBox'),
       titleOverlay: document.getElementById('titleOverlay'),
@@ -52,8 +48,6 @@ export default function App() {
 
     const DAY_SPEED = 0.00028;
     const AUTO_COLLECT_RADIUS = 34;
-    const WAVE_DURATION = 60;
-    const REST_DURATION = 15;
     const PC_BUILD_KEYS: Record<string, string> = { '1': 'fence', '2': 'tower', '3': 'house', '4': 'helper' };
 
     function rand(min: number, max: number) { return Math.random() * (max - min) + min; }
@@ -79,10 +73,10 @@ export default function App() {
     }
 
     const isInCenter = (x: number, y: number) => {
-      const clearW = WORLD_WIDTH * 0.4; // Larger neutral zone
-      const clearH = WORLD_HEIGHT * 0.4;
-      return x > WORLD_WIDTH / 2 - clearW/2 && x < WORLD_WIDTH / 2 + clearW/2 && 
-             y > WORLD_HEIGHT / 2 - clearH/2 && y < WORLD_HEIGHT / 2 + clearH/2;
+      const clearW = WIDTH * 0.52; // ~27% of area
+      const clearH = HEIGHT * 0.52;
+      return x > WIDTH / 2 - clearW/2 && x < WIDTH / 2 + clearW/2 && 
+             y > HEIGHT / 2 - clearH/2 && y < HEIGHT / 2 + clearH/2;
     };
 
     const getPos = (minX: number, maxX: number, minY: number, maxY: number) => {
@@ -106,7 +100,7 @@ export default function App() {
 
     function makeResource(type: string) {
       const margin = 56;
-      const pos = getPos(margin, WORLD_WIDTH - margin, margin, WORLD_HEIGHT - margin);
+      const pos = getPos(margin, WIDTH - margin, margin, HEIGHT - margin);
       return { id: Math.random().toString(36).slice(2), type, x: pos.x, y: pos.y, respawning: false };
     }
 
@@ -128,47 +122,35 @@ export default function App() {
     }
 
     function initialState() {
-      const campfire = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, radius: 122 };
+      const campfire = { x: WIDTH / 2, y: HEIGHT / 2, radius: 122 };
       return {
         status: 'title',
         day: 1,
-        wave: {
-          number: 1,
-          timer: WAVE_DURATION,
-          isResting: false
-        },
         timeElapsed: 0,
         spawnTimer: 0,
         timeOfDay: 0.42,
-        camera: { x: 0, y: 0 },
         cameraShake: 0,
         pulse: 0,
         effects: [] as any[],
         particles: [] as any[],
         drops: [] as any[],
-        ambientParticles: Array.from({ length: 50 }, () => ({
-          x: rand(0, WORLD_WIDTH),
-          y: rand(0, WORLD_HEIGHT),
+        ambientParticles: Array.from({ length: 25 }, () => ({
+          x: rand(0, WIDTH),
+          y: rand(0, HEIGHT),
           vx: rand(0.2, 0.8),
           vy: rand(0.1, 0.4),
           size: rand(2, 4),
           color: Math.random() > 0.5 ? '#79a950' : '#4e7a33', // Leaf colors
           type: 'leaf'
         })),
-        grass: Array.from({ length: 400 }, () => ({
-          x: rand(0, WORLD_WIDTH),
-          y: rand(0, WORLD_HEIGHT),
+        grass: Array.from({ length: 120 }, () => ({
+          x: rand(0, WIDTH),
+          y: rand(0, HEIGHT),
           type: Math.floor(rand(0, 3))
         })),
-        dirt: Array.from({ length: 80 }, () => ({
-          x: rand(0, WORLD_WIDTH),
-          y: rand(0, WORLD_HEIGHT),
-          size: rand(40, 120)
-        })),
-        loots: [] as any[],
         player: {
-          x: WORLD_WIDTH / 2,
-          y: WORLD_HEIGHT / 2 + 66,
+          x: WIDTH / 2,
+          y: HEIGHT / 2 + 66,
           speed: 2.6,
           health: 100,
           facing: 'down',
@@ -184,29 +166,27 @@ export default function App() {
           hitFlash: 0,
           attackCooldown: 48, // 0.8s
           autoAttackTimer: 0,
-          autoAttackRange: 160,
           damage: 15,
           hasHitThisAttack: false,
-          weaponType: 'sword'
         },
         campfire,
-        resources: Array.from({ length: 120 }, () => makeResource(nextResourceType())),
+        resources: Array.from({ length: 66 }, () => makeResource(nextResourceType())),
         enemies: [] as any[],
         summons: [] as any[],
-        trees: Array.from({ length: 300 }, () => {
-          const pos = getPos(-50, WORLD_WIDTH + 50, -50, WORLD_HEIGHT + 50);
+        trees: Array.from({ length: 165 }, () => {
+          const pos = getPos(-50, WIDTH + 50, -50, HEIGHT + 50);
           return { x: pos.x, y: pos.y, size: rand(0.9, 1.4) };
         }),
-        rocks: Array.from({ length: 120 }, () => {
-          const pos = getPos(20, WORLD_WIDTH - 20, 20, WORLD_HEIGHT - 20);
+        rocks: Array.from({ length: 66 }, () => {
+          const pos = getPos(20, WIDTH - 20, 20, HEIGHT - 20);
           return { x: pos.x, y: pos.y, size: rand(0.8, 1.3) };
         }),
-        bushes: Array.from({ length: 250 }, () => {
-          const pos = getPos(20, WORLD_WIDTH - 20, 20, WORLD_HEIGHT - 20);
+        bushes: Array.from({ length: 135 }, () => {
+          const pos = getPos(20, WIDTH - 20, 20, HEIGHT - 20);
           return { x: pos.x, y: pos.y, size: rand(0.7, 1.2) };
         }),
-        mushrooms: Array.from({ length: 150 }, () => {
-          const pos = getPos(30, WORLD_WIDTH - 30, 30, WORLD_HEIGHT - 30);
+        mushrooms: Array.from({ length: 84 }, () => {
+          const pos = getPos(30, WIDTH - 30, 30, HEIGHT - 30);
           return { x: pos.x, y: pos.y };
         }),
         constructions: {
@@ -217,22 +197,22 @@ export default function App() {
           helpers: [] as any[]
         },
         towerSlots: [
-          { x: WORLD_WIDTH / 2 - 142, y: WORLD_HEIGHT / 2 - 140, used: false },
-          { x: WORLD_WIDTH / 2 + 142, y: WORLD_HEIGHT / 2 - 140, used: false },
-          { x: WORLD_WIDTH / 2 - 142, y: WORLD_HEIGHT / 2 + 142, used: false },
-          { x: WORLD_WIDTH / 2 + 142, y: WORLD_HEIGHT / 2 + 142, used: false },
+          { x: WIDTH / 2 - 142, y: HEIGHT / 2 - 140, used: false },
+          { x: WIDTH / 2 + 142, y: HEIGHT / 2 - 140, used: false },
+          { x: WIDTH / 2 - 142, y: HEIGHT / 2 + 142, used: false },
+          { x: WIDTH / 2 + 142, y: HEIGHT / 2 + 142, used: false },
         ],
         houseSlots: [
-          { x: WORLD_WIDTH / 2 - 188, y: WORLD_HEIGHT / 2 + 8, used: false },
-          { x: WORLD_WIDTH / 2 + 188, y: WORLD_HEIGHT / 2 + 8, used: false },
-          { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 + 188, used: false },
+          { x: WIDTH / 2 - 188, y: HEIGHT / 2 + 8, used: false },
+          { x: WIDTH / 2 + 188, y: HEIGHT / 2 + 8, used: false },
+          { x: WIDTH / 2, y: HEIGHT / 2 + 188, used: false },
         ],
         helperSlots: [
-          { x: WORLD_WIDTH / 2 - 80, y: WORLD_HEIGHT / 2 + 26, used: false },
-          { x: WORLD_WIDTH / 2 + 80, y: WORLD_HEIGHT / 2 + 26, used: false },
-          { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 - 56, used: false },
-          { x: WORLD_WIDTH / 2 - 120, y: WORLD_HEIGHT / 2 - 40, used: false },
-          { x: WORLD_WIDTH / 2 + 120, y: WORLD_HEIGHT / 2 - 40, used: false },
+          { x: WIDTH / 2 - 80, y: HEIGHT / 2 + 26, used: false },
+          { x: WIDTH / 2 + 80, y: HEIGHT / 2 + 26, used: false },
+          { x: WIDTH / 2, y: HEIGHT / 2 - 56, used: false },
+          { x: WIDTH / 2 - 120, y: HEIGHT / 2 - 40, used: false },
+          { x: WIDTH / 2 + 120, y: HEIGHT / 2 - 40, used: false },
         ],
       };
     }
@@ -267,17 +247,11 @@ export default function App() {
     function updateUI() {
       if (ui.healthText) ui.healthText.textContent = Math.round(state.player.health) + '%';
       if (ui.healthFill) ui.healthFill.style.width = state.player.health + '%';
+      if (ui.woodCount) ui.woodCount.textContent = String(state.player.wood);
+      if (ui.stoneCount) ui.stoneCount.textContent = String(state.player.stone);
+      if (ui.fiberCount) ui.fiberCount.textContent = String(state.player.fiber);
       if (ui.goldCount) ui.goldCount.textContent = String(state.player.gold);
       
-      if (ui.waveInfo) {
-        ui.waveInfo.textContent = state.wave.isResting ? "Descanso" : `Onda ${state.wave.number}`;
-      }
-      if (ui.waveTimer) {
-        const mins = Math.floor(state.wave.timer / 60);
-        const secs = Math.floor(state.wave.timer % 60);
-        ui.waveTimer.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-      }
-
       const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
       if (ui.dayBadge) ui.dayBadge.textContent = `Dia ${state.day} — ${isNight ? 'Noite' : 'Dia'}`;
       
@@ -639,8 +613,8 @@ export default function App() {
         else state.player.facing = yAxis < 0 ? 'up' : 'down';
       }
 
-      state.player.x = clamp(state.player.x, 22, WORLD_WIDTH - 22);
-      state.player.y = clamp(state.player.y, 22, WORLD_HEIGHT - 22);
+      state.player.x = clamp(state.player.x, 22, WIDTH - 22);
+      state.player.y = clamp(state.player.y, 22, HEIGHT - 22);
 
       if (moving) {
         state.player.walkTimer += 1;
@@ -754,23 +728,26 @@ export default function App() {
     (window as any).closeUpgradePanel = () => { if (ui.upgradePanel) ui.upgradePanel.style.display = 'none'; };
 
     function spawnEnemy() {
-      if (state.wave.isResting) return;
-
       state.spawnTimer = Math.max(0, state.spawnTimer - 1);
       if (state.spawnTimer > 0) return;
 
-      // Difficulty scaling based on wave
-      const wave = state.wave.number;
-      let spawnCount = 1 + Math.floor(wave / 2);
-      let spawnInterval = Math.max(60, 300 - wave * 20); // Faster spawns over time
+      const minutes = state.timeElapsed / 60;
+      let spawnCount = 1;
+      let spawnInterval = 300; // 5s
       let possibleTypes = ['normal'];
 
-      if (wave >= 5) {
+      if (minutes >= 10) {
+        spawnCount = 8;
+        spawnInterval = 120; // 2s
         possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'boss'];
-      } else if (wave >= 3) {
-        possibleTypes = ['normal', 'green', 'fast', 'skeleton'];
-      } else if (wave >= 2) {
-        possibleTypes = ['normal', 'green'];
+      } else if (minutes >= 5) {
+        spawnCount = 6;
+        spawnInterval = 150; // 2.5s
+        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton'];
+      } else if (minutes >= 2) {
+        spawnCount = 5;
+        spawnInterval = 180; // 3s
+        possibleTypes = ['normal', 'green', 'skeleton'];
       }
 
       state.spawnTimer = spawnInterval;
@@ -778,11 +755,10 @@ export default function App() {
       for (let i = 0; i < spawnCount; i++) {
         const side = Math.floor(Math.random() * 4);
         let x = 0, y = 0;
-        const margin = 100;
-        if (side === 0) { x = rand(0, WORLD_WIDTH); y = -margin; }
-        if (side === 1) { x = WORLD_WIDTH + margin; y = rand(0, WORLD_HEIGHT); }
-        if (side === 2) { x = rand(0, WORLD_WIDTH); y = WORLD_HEIGHT + margin; }
-        if (side === 3) { x = -margin; y = rand(0, WORLD_HEIGHT); }
+        if (side === 0) { x = rand(0, WIDTH); y = -20; }
+        if (side === 1) { x = WIDTH + 20; y = rand(0, HEIGHT); }
+        if (side === 2) { x = rand(0, WIDTH); y = HEIGHT + 20; }
+        if (side === 3) { x = -20; y = rand(0, HEIGHT); }
 
         const r = Math.random();
         let type = 'normal';
@@ -795,46 +771,46 @@ export default function App() {
         else if (possibleTypes.includes('fast') && r < 0.35) type = 'fast';
         else if (possibleTypes.includes('green') && r < 0.55) type = 'green';
 
-        const hpMult = 1 + (wave - 1) * 0.25;
-        const dmgMult = 1 + (wave - 1) * 0.15;
+        const hpMult = 1 + (state.day - 1) * 0.2;
+        const dmgMult = 1 + (state.day - 1) * 0.1;
 
-        let baseHp = (45 + wave * 5) * hpMult;
-        let speed = 0.35 + wave * 0.02;
+        let baseHp = (45 + state.day * 3) * hpMult;
+        let speed = 0.35 + state.day * 0.01;
         let damage = 0.12 * dmgMult;
         let size = 1;
         let color = '#8b5046'; // Slime Azul (default)
         let focusFences = false;
 
         if (type === 'boss') {
-          baseHp *= 12;
+          baseHp *= 10;
           speed *= 0.4;
-          damage *= 5;
-          size = 3.0;
+          damage *= 4;
+          size = 2.5;
           color = '#ffd700'; // Gold for King Slime
         } else if (type === 'armored') {
-          baseHp *= 4;
+          baseHp *= 3;
           speed *= 0.5;
-          damage *= 2.5;
-          size = 1.8;
+          damage *= 2;
+          size = 1.5;
           color = '#b35d44'; // Golem
           focusFences = true;
         } else if (type === 'fast') {
-          baseHp *= 0.5;
-          speed *= 2.2;
+          baseHp *= 0.6;
+          speed *= 2.0;
           damage *= 0.8;
-          size = 0.7;
+          size = 0.8;
           color = '#8a2be2'; // Drackee
         } else if (type === 'green') {
-          baseHp *= 1.8;
+          baseHp *= 1.5;
           speed *= 0.8;
-          damage *= 1.3;
-          size = 1.2;
+          damage *= 1.2;
+          size = 1.1;
           color = '#2e8b57'; // Slime Verde
         } else if (type === 'skeleton') {
-          baseHp *= 1.4;
-          speed *= 1.2;
-          damage *= 1.5;
-          size = 1.3;
+          baseHp *= 1.2;
+          speed *= 1.1;
+          damage *= 1.4;
+          size = 1.2;
           color = '#e0e0e0'; // Skeleton Bone
         }
 
@@ -846,9 +822,7 @@ export default function App() {
           cooldown: 0, hitFlash: 0,
           type, size, color, focusFences,
           strategyOffset: { x: rand(-30, 30), y: rand(-30, 30) },
-          stuckTimer: 0,
-          isDying: false,
-          deathTimer: 0
+          stuckTimer: 0
         });
       }
     }
@@ -856,46 +830,8 @@ export default function App() {
     function segmentCenter(seg: any) { return { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }; }
 
     function updateEnemies() {
-      for (let i = state.enemies.length - 1; i >= 0; i--) {
+      for (let i = 0; i < state.enemies.length; i++) {
         const enemy = state.enemies[i];
-        
-        if (enemy.isDying) {
-          enemy.deathTimer += 1/60;
-          if (enemy.deathTimer >= 0.5) {
-            // Drop Loot
-            if (Math.random() < 0.15) {
-              const types = ['sword', 'bow', 'staff'];
-              const type = types[Math.floor(Math.random() * types.length)];
-              state.loots.push({
-                x: enemy.x,
-                y: enemy.y,
-                type,
-                timer: 0,
-                id: Math.random()
-              });
-            }
-            state.enemies.splice(i, 1);
-          }
-          continue;
-        }
-
-        if (enemy.hp <= 0) {
-          enemy.isDying = true;
-          enemy.deathTimer = 0;
-          state.player.gold += Math.floor(5 + state.wave.number * 2);
-          addEffect(enemy.x, enemy.y, "MORTE", "#ffffff");
-          // Cloud puff
-          for(let k=0; k<5; k++) {
-            state.particles.push({
-              x: enemy.x, y: enemy.y,
-              vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2,
-              life: 20+Math.random()*20, maxLife: 40,
-              size: 5+Math.random()*5, color: '#ffffff', type: 'cloud'
-            });
-          }
-          continue;
-        }
-
         if (enemy.hitFlash > 0) enemy.hitFlash--;
         enemy.cooldown = Math.max(0, enemy.cooldown - 1);
         
@@ -1245,9 +1181,8 @@ export default function App() {
       // Start Attack
       if (state.player.autoAttackTimer <= 0) {
         let nearest = null;
-        let bestDist = state.player.autoAttackRange;
+        let bestDist = 100; // Search range slightly larger than hit range
         for (const e of state.enemies) {
-          if (e.isDying) continue;
           const d = Math.hypot(state.player.x - e.x, state.player.y - e.y);
           if (d < bestDist) {
             bestDist = d;
@@ -1344,35 +1279,6 @@ export default function App() {
       state.cameraShake *= 0.88;
     }
 
-    function updateLoots() {
-      for (let i = state.loots.length - 1; i >= 0; i--) {
-        const loot = state.loots[i];
-        loot.timer += 0.05;
-        
-        const dist = Math.hypot(state.player.x - loot.x, state.player.y - loot.y);
-        if (dist < 30) {
-          // Collect
-          if (loot.type === 'sword') {
-            state.player.damage += 2;
-            showQuestMessage("DANO AUMENTADO! (+2)", 2000);
-          } else if (loot.type === 'bow') {
-            state.player.autoAttackRange += 20;
-            showQuestMessage("ALCANCE AUMENTADO! (+20)", 2000);
-          } else if (loot.type === 'staff') {
-            state.player.attackCooldown = Math.max(10, state.player.attackCooldown - 2);
-            showQuestMessage("VELOCIDADE DE ATAQUE AUMENTADA!", 2000);
-          }
-          state.loots.splice(i, 1);
-          continue;
-        }
-        
-        // Auto-despawn after 30s
-        if (loot.timer > 600) {
-          state.loots.splice(i, 1);
-        }
-      }
-    }
-
     function updateGame() {
       if (state.status !== 'playing') return;
 
@@ -1384,34 +1290,10 @@ export default function App() {
         state.day += 1;
       }
 
-      // Wave System Logic
-      state.wave.timer -= 1/60;
-      if (state.wave.timer <= 0) {
-        state.wave.isResting = !state.wave.isResting;
-        if (state.wave.isResting) {
-          state.wave.timer = REST_DURATION;
-          showQuestMessage("FASE DE PREPARAÇÃO - 15s", 3000);
-        } else {
-          state.wave.number += 1;
-          state.wave.timer = WAVE_DURATION;
-          showQuestMessage(`ONDA ${state.wave.number} COMEÇOU!`, 3000);
-        }
-      }
-
       movePlayer();
-
-      // Camera Follow
-      const targetCamX = state.player.x - WIDTH / 2;
-      const targetCamY = state.player.y - HEIGHT / 2;
-      state.camera.x += (targetCamX - state.camera.x) * 0.1;
-      state.camera.y += (targetCamY - state.camera.y) * 0.1;
-      state.camera.x = clamp(state.camera.x, 0, WORLD_WIDTH - WIDTH);
-      state.camera.y = clamp(state.camera.y, 0, WORLD_HEIGHT - HEIGHT);
-
       autoCollectResources();
       spawnEnemy();
       updateEnemies();
-      updateLoots();
       updateSummons();
       updateDrops();
       updateDefenders();
@@ -1432,19 +1314,11 @@ export default function App() {
     }
 
     function drawGround() {
-      const grad = ctx.createLinearGradient(0, 0, 0, WORLD_HEIGHT);
+      const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
       grad.addColorStop(0, '#1e2b1b');
       grad.addColorStop(1, '#111a10');
       ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-
-      // Dirt patches
-      state.dirt.forEach(d => {
-        ctx.fillStyle = 'rgba(40, 30, 20, 0.15)';
-        ctx.beginPath();
-        ctx.ellipse(d.x, d.y, d.size, d.size * 0.6, 0, 0, Math.PI * 2);
-        ctx.fill();
-      });
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
       // Grass tufts
       state.grass.forEach(g => {
@@ -1462,6 +1336,31 @@ export default function App() {
           ctx.fill();
         }
       });
+
+      // Dirt patches
+      ctx.fillStyle = 'rgba(79, 54, 33, 0.06)';
+      for (let i = 0; i < 15; i++) {
+        const x = (i * 137 + 40) % WIDTH;
+        const y = (i * 183 + 120) % HEIGHT;
+        ctx.beginPath();
+        ctx.ellipse(x, y, 60, 22, 0.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Small stones and wood debris
+      for (let i = 0; i < 20; i++) {
+        const x = (i * 197 + 100) % WIDTH;
+        const y = (i * 223 + 50) % HEIGHT;
+        if (i % 2 === 0) {
+          // Tiny stone
+          ctx.fillStyle = 'rgba(128, 128, 116, 0.2)';
+          ctx.fillRect(x, y, 4, 3);
+        } else {
+          // Tiny wood bit
+          ctx.fillStyle = 'rgba(108, 70, 44, 0.2)';
+          ctx.fillRect(x, y, 6, 2);
+        }
+      }
     }
 
     function drawTree(x: number, y: number, s: number) {
@@ -2198,9 +2097,9 @@ export default function App() {
       const s = e.size || 1;
       const bob = Math.sin(performance.now() * 0.01) * 3;
       
-      if (e.isDying) {
+      if (e.dying !== undefined) {
         ctx.save();
-        const progress = e.deathTimer / 0.5;
+        const progress = (30 - e.dying) / 30;
         ctx.globalAlpha = 1 - progress;
         ctx.translate(e.x, e.y);
         ctx.rotate(progress * 0.5);
@@ -2211,7 +2110,11 @@ export default function App() {
         ctx.scale(scaleX, scaleY);
         
         // White flash during death
-        ctx.fillStyle = progress < 0.3 ? '#fff' : (e.color || '#fff');
+        if (e.dying > 15) {
+          ctx.fillStyle = '#fff';
+        } else {
+          ctx.fillStyle = e.color || '#fff';
+        }
         
         ctx.beginPath();
         ctx.arc(0, 0, 14 * s, 0, Math.PI * 2);
@@ -2514,46 +2417,9 @@ export default function App() {
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
     }
 
-    function drawLoot(loot: any) {
-      const bob = Math.sin(performance.now() * 0.01) * 5;
-      ctx.save();
-      ctx.translate(loot.x, loot.y + bob);
-      
-      // Glow
-      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, 25);
-      grad.addColorStop(0, 'rgba(255, 215, 0, 0.4)');
-      grad.addColorStop(1, 'rgba(255, 215, 0, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(0, 0, 25, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Chest/Item
-      ctx.fillStyle = '#8b4513';
-      ctx.fillRect(-10, -8, 20, 16);
-      ctx.fillStyle = '#d2691e';
-      ctx.fillRect(-10, -8, 20, 6);
-      ctx.strokeStyle = '#ffd700';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-10, -8, 20, 16);
-      
-      // Icon
-      ctx.fillStyle = '#ffd700';
-      ctx.font = 'bold 12px Arial';
-      ctx.textAlign = 'center';
-      const icon = loot.type === 'sword' ? '⚔️' : loot.type === 'bow' ? '🏹' : '🪄';
-      ctx.fillText(icon, 0, 5);
-      
-      ctx.restore();
-    }
-
     function render() {
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
       ctx.save();
-      
-      // Apply Camera
-      ctx.translate(-state.camera.x, -state.camera.y);
-
       if (state.cameraShake > 0) {
         ctx.translate((Math.random() - 0.5) * state.cameraShake, (Math.random() - 0.5) * state.cameraShake);
       }
@@ -2575,7 +2441,6 @@ export default function App() {
         ...state.summons.map(s => ({ y: s.y, draw: () => drawSummon(s) })),
         ...state.resources.map(res => ({ y: res.y, draw: () => drawResource(res) })),
         ...state.drops.map(d => ({ y: d.y, draw: () => drawDrop(d) })),
-        ...state.loots.map(l => ({ y: l.y, draw: () => drawLoot(l) })),
         { y: state.player.y, draw: () => drawPlayer() },
         ...state.enemies.map(e => ({ y: e.y, draw: () => drawEnemy(e) })),
       ];
@@ -2635,12 +2500,16 @@ export default function App() {
 
           <div className="hud-stats dq-window">
             <div className="hud-stat-item">
-              <Sword size={16} color="#ffd700" />
-              <span id="waveInfo">Onda 1</span>
+              <Trees size={16} color="#8c5a39" />
+              <span id="woodCount">0</span>
             </div>
             <div className="hud-stat-item">
-              <Timer size={16} color="#ffffff" />
-              <span id="waveTimer">00:00</span>
+              <Shield size={16} color="#808074" />
+              <span id="stoneCount">0</span>
+            </div>
+            <div className="hud-stat-item">
+              <Gem size={16} color="#79a950" />
+              <span id="fiberCount">0</span>
             </div>
           </div>
         </div>
