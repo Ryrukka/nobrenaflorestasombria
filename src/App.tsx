@@ -1,11 +1,90 @@
-import React, { useEffect, useRef } from 'react';
-import { Heart, Coins, Trees, Gem, Hammer, Shield, Home, Users, X, ArrowUpCircle, Wrench } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Heart, Coins, Trees, Gem, Hammer, Shield, Home, Users, X, ArrowUpCircle, Wrench, Play, User } from 'lucide-react';
+import io from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(null);
+  const socketRef = useRef<Socket | null>(null);
+  
+  const [roomId, setRoomId] = useState('');
+  const [playerName, setPlayerName] = useState('');
+  const [isJoined, setIsJoined] = useState(false);
+  const [gameState, setGameState] = useState<any>(null);
+  const [isAudioOn, setIsAudioOn] = useState(true);
+
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const bgMusicRef = useRef<HTMLAudioElement | null>(null);
+  const hasStartedRef = useRef(false);
+
+  const handleJoin = () => {
+    setIsJoined(true);
+    hasStartedRef.current = true;
+    
+    // Initialize audio context on user interaction
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+  };
 
   useEffect(() => {
+    if (!isJoined || !gameState) return;
+    
+    if (!bgMusicRef.current) {
+      bgMusicRef.current = new Audio();
+      bgMusicRef.current.loop = true;
+    }
+
+    const currentPhase = gameState.isPrepPhase ? 'prep' : 'battle';
+    const isIntense = gameState.enemies.length > 10;
+    const isBoss = gameState.wave % 5 === 0 && !gameState.isPrepPhase;
+
+    let trackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'; // Default
+    if (currentPhase === 'prep') trackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3';
+    if (currentPhase === 'battle') trackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3';
+    if (isIntense) trackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3';
+    if (isBoss) trackUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3';
+
+    if (bgMusicRef.current.src !== trackUrl) {
+      bgMusicRef.current.src = trackUrl;
+      if (isAudioOn) bgMusicRef.current.play().catch(() => {});
+    }
+
+    if (!isAudioOn) {
+      bgMusicRef.current.pause();
+    } else {
+      bgMusicRef.current.play().catch(() => {});
+    }
+
+  }, [gameState?.isPrepPhase, gameState?.wave, gameState?.enemies.length, isAudioOn]);
+
+  useEffect(() => {
+    if (!isJoined) return;
+    
+    const socket = io();
+    socketRef.current = socket;
+    
+    socket.emit('joinRoom', roomId || 'default', playerName || 'Hero');
+    
+    socket.on('gameState', (state) => {
+      setGameState(state);
+      // Update startWaveBtn handler every time state changes (to ensure it has latest roomId)
+      const startWaveBtn = document.getElementById('startWaveBtn');
+      if (startWaveBtn) {
+        startWaveBtn.onclick = () => {
+          socket.emit('startWave', roomId || 'default');
+        };
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [isJoined]);
+
+  useEffect(() => {
+    if (!isJoined || !gameState) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -37,6 +116,12 @@ export default function App() {
       joystickBase: document.getElementById('joystickBase'),
       joystickStick: document.getElementById('joystickStick'),
       questMessage: document.getElementById('questMessage'),
+      soundBtn: document.getElementById('soundBtn'),
+      waveInfo: document.getElementById('waveInfo'),
+      waveTimer: document.getElementById('waveTimer'),
+      prepOverlay: document.getElementById('prepOverlay'),
+      prepTimer: document.getElementById('prepTimer'),
+      startWaveBtn: document.getElementById('startWaveBtn'),
     };
 
     const keys: Record<string, boolean> = {};
@@ -45,10 +130,13 @@ export default function App() {
     let selectedConstruction: any = null;
     let messageTimer: any = null;
     let forceMobile = false;
+    let soundOn = true;
+    let audioContext: AudioContext | null = null;
+    let bgMusic: HTMLAudioElement | null = null;
 
     const DAY_SPEED = 0.00028;
     const AUTO_COLLECT_RADIUS = 34;
-    const PC_BUILD_KEYS: Record<string, string> = { '1': 'fence', '2': 'tower', '3': 'house', '4': 'helper' };
+    const PC_BUILD_KEYS: Record<string, string> = { '1': 'fence', '2': 'tower', '3': 'helper' };
 
     function rand(min: number, max: number) { return Math.random() * (max - min) + min; }
     function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
@@ -73,8 +161,8 @@ export default function App() {
     }
 
     const isInCenter = (x: number, y: number) => {
-      const clearW = WIDTH * 0.52; // ~27% of area
-      const clearH = HEIGHT * 0.52;
+      const clearW = WIDTH * 0.82; // Increased from 0.72
+      const clearH = HEIGHT * 0.82;
       return x > WIDTH / 2 - clearW/2 && x < WIDTH / 2 + clearW/2 && 
              y > HEIGHT / 2 - clearH/2 && y < HEIGHT / 2 + clearH/2;
     };
@@ -122,10 +210,14 @@ export default function App() {
     }
 
     function initialState() {
-      const campfire = { x: WIDTH / 2, y: HEIGHT / 2, radius: 122 };
+      const campfire = { x: WIDTH / 2, y: HEIGHT / 2, radius: 122, hp: 500, maxHp: 500 };
       return {
         status: 'title',
         day: 1,
+        wave: 1,
+        waveTimer: 60,
+        prepTimer: 15,
+        isPrepPhase: true,
         timeElapsed: 0,
         spawnTimer: 0,
         timeOfDay: 0.42,
@@ -153,6 +245,7 @@ export default function App() {
           y: HEIGHT / 2 + 66,
           speed: 2.6,
           health: 100,
+          maxHealth: 100,
           facing: 'down',
           frame: 0,
           walkTimer: 0,
@@ -167,7 +260,14 @@ export default function App() {
           attackCooldown: 48, // 0.8s
           autoAttackTimer: 0,
           damage: 15,
+          defense: 0,
           hasHitThisAttack: false,
+          equipment: {
+            weapon: null as any,
+            armor: null as any,
+            accessory: null as any
+          },
+          inventory: [] as any[]
         },
         campfire,
         resources: Array.from({ length: 66 }, () => makeResource(nextResourceType())),
@@ -193,7 +293,6 @@ export default function App() {
           fenceBuilt: false,
           fenceSegments: [] as any[],
           towers: [] as any[],
-          houses: [] as any[],
           helpers: [] as any[]
         },
         towerSlots: [
@@ -201,11 +300,6 @@ export default function App() {
           { x: WIDTH / 2 + 142, y: HEIGHT / 2 - 140, used: false },
           { x: WIDTH / 2 - 142, y: HEIGHT / 2 + 142, used: false },
           { x: WIDTH / 2 + 142, y: HEIGHT / 2 + 142, used: false },
-        ],
-        houseSlots: [
-          { x: WIDTH / 2 - 188, y: HEIGHT / 2 + 8, used: false },
-          { x: WIDTH / 2 + 188, y: HEIGHT / 2 + 8, used: false },
-          { x: WIDTH / 2, y: HEIGHT / 2 + 188, used: false },
         ],
         helperSlots: [
           { x: WIDTH / 2 - 80, y: HEIGHT / 2 + 26, used: false },
@@ -245,16 +339,22 @@ export default function App() {
     }
 
     function updateUI() {
-      if (ui.healthText) ui.healthText.textContent = Math.round(state.player.health) + '%';
-      if (ui.healthFill) ui.healthFill.style.width = state.player.health + '%';
-      if (ui.woodCount) ui.woodCount.textContent = String(state.player.wood);
-      if (ui.stoneCount) ui.stoneCount.textContent = String(state.player.stone);
-      if (ui.fiberCount) ui.fiberCount.textContent = String(state.player.fiber);
-      if (ui.goldCount) ui.goldCount.textContent = String(state.player.gold);
-      
-      const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
-      if (ui.dayBadge) ui.dayBadge.textContent = `Dia ${state.day} — ${isNight ? 'Noite' : 'Dia'}`;
-      
+      if (!gameState) return;
+      const me = gameState.players[socketRef.current?.id || ''];
+      if (!me) return;
+
+      if (ui.healthFill) ui.healthFill.style.width = `${me.health}%`;
+      if (ui.healthText) ui.healthText.textContent = `${Math.ceil(me.health)} / ${me.maxHealth}`;
+      if (ui.woodCount) ui.woodCount.textContent = String(me.wood);
+      if (ui.stoneCount) ui.stoneCount.textContent = String(me.stone);
+      if (ui.fiberCount) ui.fiberCount.textContent = String(me.fiber);
+      if (ui.goldCount) ui.goldCount.textContent = String(me.gold);
+      if (ui.dayBadge) ui.dayBadge.textContent = `ONDA ${gameState.wave}`;
+
+      if (ui.waveTimer) ui.waveTimer.textContent = `Tempo: ${Math.ceil(gameState.waveTimer)}s`;
+      if (ui.prepOverlay) ui.prepOverlay.style.display = gameState.isPrepPhase ? 'flex' : 'none';
+      if (ui.prepTimer) ui.prepTimer.textContent = `Preparação: ${Math.ceil(gameState.prepTimer)}s`;
+
       const mobile = isMobileLayout();
       if (ui.mobileUI) ui.mobileUI.style.display = mobile ? 'block' : 'none';
     }
@@ -297,10 +397,14 @@ export default function App() {
     }
 
     ui.closePanelBtn?.addEventListener('touchstart', (e) => { e.preventDefault(); closeUpgradePanel(); });
-    ui.closePanelBtn?.addEventListener('click', closeUpgradePanel);
+    ui.closePanelBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeUpgradePanel();
+    });
     
     const handleUpgrade = (e: any) => {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedConstruction) {
         upgradeConstruction(selectedConstruction);
         if (selectedConstruction) openUpgradePanel(selectedConstruction);
@@ -311,6 +415,7 @@ export default function App() {
 
     const handleRepair = (e: any) => {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedConstruction) {
         repairConstruction(selectedConstruction);
         if (selectedConstruction) openUpgradePanel(selectedConstruction);
@@ -319,22 +424,81 @@ export default function App() {
     ui.repairBtn?.addEventListener('touchstart', handleRepair);
     ui.repairBtn?.addEventListener('click', handleRepair);
 
-    const handleStart = (e: any) => {
-      e.preventDefault();
+    function initAudio() {
+      if (audioContext) return;
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      bgMusic = new Audio();
+      bgMusic.loop = true;
+      bgMusic.volume = 0.3;
+      bgMusic.src = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'; 
+      if (soundOn) bgMusic.play().catch(() => {});
+    }
+    initAudioRef.current = initAudio;
+
+    setPlayingRef.current = () => {
       state.status = 'playing';
-      if (ui.titleOverlay) ui.titleOverlay.style.display = 'none';
       updateUI();
     };
-    document.getElementById('startBtn')?.addEventListener('touchstart', handleStart);
-    document.getElementById('startBtn')?.addEventListener('click', handleStart);
 
-    document.getElementById('restartBtn')?.addEventListener('click', () => {
-      state = initialState();
-      state.status = 'playing';
-      if (ui.gameOverOverlay) ui.gameOverOverlay.style.display = 'none';
-      closeUpgradePanel();
-      updateUI();
-    });
+    function updateMusic() {
+      if (!bgMusic || !soundOn) return;
+      
+      const targetSrc = state.isPrepPhase 
+        ? 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3' 
+        : state.wave % 5 === 0 
+          ? 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3' 
+          : 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'; 
+          
+      if (bgMusic.src !== targetSrc) {
+        bgMusic.src = targetSrc;
+        bgMusic.play().catch(() => {});
+      }
+    }
+
+    function toggleSound() {
+      soundOn = !soundOn;
+      if (bgMusic) {
+        if (soundOn) bgMusic.play().catch(() => {});
+        else bgMusic.pause();
+      }
+      if (ui.soundBtn) ui.soundBtn.textContent = soundOn ? '🔊' : '🔈';
+    }
+    (window as any).toggleSound = toggleSound;
+
+    function updateWave() {
+      if (state.status !== 'playing') return;
+
+      if (state.isPrepPhase) {
+        state.prepTimer -= 1/60;
+        if (state.prepTimer <= 0) {
+          startWave();
+        }
+      } else {
+        state.waveTimer -= 1/60;
+        if (state.waveTimer <= 0 && state.enemies.length === 0) {
+          startPrep();
+        }
+      }
+    }
+
+    function startPrep() {
+      state.isPrepPhase = true;
+      state.prepTimer = 15;
+      state.wave++;
+      showQuestMessage(`ONDA ${state.wave - 1} CONCLUÍDA! PREPARE-SE!`, 3000);
+      updateMusic();
+    }
+
+    function startWave() {
+      state.isPrepPhase = false;
+      state.waveTimer = 60;
+      showQuestMessage(`ONDA ${state.wave} INICIADA!`, 3000);
+      updateMusic();
+    }
+    
+    // startWaveBtn listener removed from here
+
+    // handleRestart removed from here
 
     document.getElementById('toggleMobileMode')?.addEventListener('click', () => {
       forceMobile = !forceMobile;
@@ -372,7 +536,7 @@ export default function App() {
         openUpgradePanel(target);
       } else {
         if (!isMobileLayout()) closeUpgradePanel();
-        playerAttack(px, py);
+        playerAttack();
       }
     });
 
@@ -388,8 +552,9 @@ export default function App() {
 
     // Hotbar / Shop Menu listeners
     document.querySelectorAll('.hotbar-item').forEach((item, index) => {
-      item.addEventListener('click', () => {
-        const types = ['fence', 'tower', 'house', 'helper'];
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const types = ['fence', 'tower', 'helper'];
         buyConstruction(types[index]);
         addParticles(state.player.x, state.player.y, '#ffd700', 4);
       });
@@ -449,11 +614,12 @@ export default function App() {
     }
 
     function getConstructionAt(x: number, y: number) {
+      // Campfire first
+      if (Math.hypot(x - state.campfire.x, y - state.campfire.y) < 40) {
+        return { type: 'campfire', label: 'Fogueira', ref: state.campfire };
+      }
       for (const tower of state.constructions.towers) {
         if (Math.hypot(x - tower.x, y - tower.y) < 26) return { type: 'tower', label: 'Torre', ref: tower };
-      }
-      for (const house of state.constructions.houses) {
-        if (Math.abs(x - house.x) < 26 && Math.abs(y - house.y) < 28) return { type: 'house', label: 'Casa', ref: house };
       }
       for (const helper of state.constructions.helpers) {
         if (Math.hypot(x - helper.x, y - helper.y) < 22) return { type: 'helper', label: 'Soldado', ref: helper };
@@ -478,13 +644,13 @@ export default function App() {
       target.ref.maxHp += 50;
       target.ref.hp = target.ref.maxHp;
 
-      if (target.type === 'tower') {
+      if (target.type === 'campfire') {
+        target.ref.radius += 10;
+        addEffect(target.ref.x, target.ref.y - 24, 'Fogo Aumentado!', '#ffd700');
+      } else if (target.type === 'tower') {
         target.ref.damage += 5;
         target.ref.range += 10;
         addEffect(target.ref.x, target.ref.y - 24, '+5 Dano!', '#ffd700');
-      } else if (target.type === 'house') {
-        // house.goldTimer threshold logic is in updateHouses
-        addEffect(target.ref.x, target.ref.y - 24, '+15% Velocidade!', '#ffd700');
       } else if (target.type === 'helper') {
         target.ref.damage += 4;
         target.ref.range += 10;
@@ -540,18 +706,6 @@ export default function App() {
         state.constructions.towers.push({ x: slot.x, y: slot.y, level: 1, hp: 100, maxHp: 100, damage: 10, range: 130, cooldown: 0 });
         addEffect(slot.x, slot.y - 22, 'torre construída!', '#d3b071');
         return showMessage('Torre construída!');
-      }
-      if (type === 'house') {
-        const slot = state.houseSlots.find(s => !s.used);
-        if (!slot) return showMessage('Nenhum espaço disponível!');
-        const cost = { wood: 12, fiber: 5 };
-        if (!canPay(p, cost)) return showMessage(`Casa: ${cost.wood} madeira, ${cost.fiber} fibra`);
-        pay(p, cost);
-        state.cameraShake = 8;
-        slot.used = true;
-        state.constructions.houses.push({ x: slot.x, y: slot.y, level: 1, hp: 120, maxHp: 120, goldTimer: 0 });
-        addEffect(slot.x, slot.y - 22, 'casa construída!', '#c38c5b');
-        return showMessage('Casa construída!');
       }
       if (type === 'helper') {
         const slot = state.helperSlots.find(s => !s.used);
@@ -662,315 +816,85 @@ export default function App() {
       });
     }
 
-    function playerAttack(tx: number, ty: number) {
-      if (state.player.idleAttackTimer > 0) return;
-      
-      state.player.idleAttackTimer = 25; // Cooldown
-      state.player.attackTimer = 10; // Animation duration
-      state.player.attackAngle = Math.atan2(ty - state.player.y, tx - state.player.x);
-      
-      const range = 65;
-      for (const enemy of state.enemies) {
-        const d = Math.hypot(state.player.x - enemy.x, state.player.y - enemy.y);
-        if (d < range) {
-          const angToEnemy = Math.atan2(enemy.y - state.player.y, enemy.x - state.player.x);
-          let diff = Math.abs(angToEnemy - state.player.attackAngle);
-          if (diff > Math.PI) diff = Math.PI * 2 - diff;
-          
-          if (diff < 1.1) { // ~60 degree cone
-            const isCrit = Math.random() < 0.15;
-            const dmg = isCrit ? 24 : 12;
-            enemy.hp -= dmg;
-            enemy.hitFlash = 5;
-            
-            // Knockback
-            const kx = enemy.x - state.player.x;
-            const ky = enemy.y - state.player.y;
-            const kd = Math.hypot(kx, ky) || 1;
-            enemy.vx = (kx / kd) * 9;
-            enemy.vy = (ky / kd) * 9;
-            
-            triggerShake(isCrit ? 8 : 4);
-            addEffect(enemy.x, enemy.y, isCrit ? 'CRÍTICO!' : `-${dmg}`, isCrit ? '#ffff00' : '#ffffff');
-            addParticles(enemy.x, enemy.y, '#ff0000', 8);
-            
-            if (enemy.hp <= 0) {
-              const isChest = Math.random() < 0.10;
-              if (isChest) {
-                state.player.gold += 5;
-                addEffect(enemy.x, enemy.y - 12, 'COFRE! +5 ouro', '#ffd700');
-                addParticles(enemy.x, enemy.y, '#ffd700', 12);
-              } else {
-                state.player.gold += 1;
-                addEffect(enemy.x, enemy.y - 12, '+1 ouro', '#e0c055');
-              }
-            }
-          }
-        }
-      }
-    }
+    function playerAttack() {
+      if (!socketRef.current || !isJoined || !gameState) return;
+      const me = gameState.players[socketRef.current.id];
+      if (!me || me.attackTimer > 0) return;
 
-    function playerAttackDirectional() {
-      let tx = state.player.x;
-      let ty = state.player.y;
-      
-      if (state.player.facing === 'left') tx -= 50;
-      else if (state.player.facing === 'right') tx += 50;
-      else if (state.player.facing === 'up') ty -= 50;
-      else ty += 50;
-      
-      playerAttack(tx, ty);
+      // Calculate angle from player to mouse/pointer
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mouseX = (pointer.x - rect.left) * scaleX;
+      const mouseY = (pointer.y - rect.top) * scaleY;
+      const angle = Math.atan2(mouseY - me.y, mouseX - me.x);
+
+      socketRef.current.emit('playerAttack', roomId || 'default', angle);
     }
 
     // Expose to window for JSX
-    (window as any).buyConstruction = buyConstruction;
-    (window as any).playerAttack = playerAttackDirectional;
+    (window as any).playerAttack = playerAttack;
     (window as any).closeUpgradePanel = () => { if (ui.upgradePanel) ui.upgradePanel.style.display = 'none'; };
 
     function spawnEnemy() {
-      state.spawnTimer = Math.max(0, state.spawnTimer - 1);
-      if (state.spawnTimer > 0) return;
-
-      const minutes = state.timeElapsed / 60;
-      let spawnCount = 1;
-      let spawnInterval = 300; // 5s
-      let possibleTypes = ['normal'];
-
-      if (minutes >= 10) {
-        spawnCount = 8;
-        spawnInterval = 120; // 2s
-        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'boss'];
-      } else if (minutes >= 5) {
-        spawnCount = 6;
-        spawnInterval = 150; // 2.5s
-        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton'];
-      } else if (minutes >= 2) {
-        spawnCount = 5;
-        spawnInterval = 180; // 3s
-        possibleTypes = ['normal', 'green', 'skeleton'];
-      }
-
-      state.spawnTimer = spawnInterval;
-
-      for (let i = 0; i < spawnCount; i++) {
+      if (state.isPrepPhase) return;
+      
+      state.spawnTimer--;
+      if (state.spawnTimer <= 0) {
+        // Difficulty scales with wave
+        const waveScale = 1 + (state.wave - 1) * 0.2;
+        state.spawnTimer = Math.max(20, 120 - state.wave * 5);
+        
         const side = Math.floor(Math.random() * 4);
-        let x = 0, y = 0;
-        if (side === 0) { x = rand(0, WIDTH); y = -20; }
-        if (side === 1) { x = WIDTH + 20; y = rand(0, HEIGHT); }
-        if (side === 2) { x = rand(0, WIDTH); y = HEIGHT + 20; }
-        if (side === 3) { x = -20; y = rand(0, HEIGHT); }
+        let x, y;
+        if (side === 0) { x = rand(0, WIDTH); y = -50; }
+        else if (side === 1) { x = rand(0, WIDTH); y = HEIGHT + 50; }
+        else if (side === 2) { x = -50; y = rand(0, HEIGHT); }
+        else { x = WIDTH + 50; y = rand(0, HEIGHT); }
 
-        const r = Math.random();
-        let type = 'normal';
-        if (possibleTypes.includes('boss') && r < 0.05) {
-          type = 'boss';
-          showQuestMessage('¡O Rei Slime apareceu!', 4000);
-        }
-        else if (possibleTypes.includes('armored') && r < 0.15) type = 'armored';
-        else if (possibleTypes.includes('skeleton') && r < 0.25) type = 'skeleton';
-        else if (possibleTypes.includes('fast') && r < 0.35) type = 'fast';
-        else if (possibleTypes.includes('green') && r < 0.55) type = 'green';
+        const types = ['slime', 'goblin', 'skeleton', 'orc', 'knight'];
+        const typeIndex = Math.min(types.length - 1, Math.floor(state.wave / 3));
+        const type = types[Math.floor(Math.random() * (typeIndex + 1))];
+        
+        let hp = 20 * waveScale;
+        let damage = 5 * waveScale;
+        let speed = 1.2 + Math.min(1, state.wave * 0.05);
+        let color = '#79a950';
+        let size = 12;
 
-        const hpMult = 1 + (state.day - 1) * 0.2;
-        const dmgMult = 1 + (state.day - 1) * 0.1;
-
-        let baseHp = (45 + state.day * 3) * hpMult;
-        let speed = 0.35 + state.day * 0.01;
-        let damage = 0.12 * dmgMult;
-        let size = 1;
-        let color = '#8b5046'; // Slime Azul (default)
-        let focusFences = false;
-
-        if (type === 'boss') {
-          baseHp *= 10;
-          speed *= 0.4;
-          damage *= 4;
-          size = 2.5;
-          color = '#ffd700'; // Gold for King Slime
-        } else if (type === 'armored') {
-          baseHp *= 3;
-          speed *= 0.5;
-          damage *= 2;
-          size = 1.5;
-          color = '#b35d44'; // Golem
-          focusFences = true;
-        } else if (type === 'fast') {
-          baseHp *= 0.6;
-          speed *= 2.0;
-          damage *= 0.8;
-          size = 0.8;
-          color = '#8a2be2'; // Drackee
-        } else if (type === 'green') {
-          baseHp *= 1.5;
-          speed *= 0.8;
-          damage *= 1.2;
-          size = 1.1;
-          color = '#2e8b57'; // Slime Verde
-        } else if (type === 'skeleton') {
-          baseHp *= 1.2;
-          speed *= 1.1;
-          damage *= 1.4;
-          size = 1.2;
-          color = '#e0e0e0'; // Skeleton Bone
-        }
+        if (type === 'goblin') { hp = 35 * waveScale; damage = 8 * waveScale; speed = 1.6; color = '#4e7a33'; size = 14; }
+        if (type === 'skeleton') { hp = 50 * waveScale; damage = 12 * waveScale; speed = 1.0; color = '#e0e0e0'; size = 16; }
+        if (type === 'orc') { hp = 100 * waveScale; damage = 20 * waveScale; speed = 0.8; color = '#5d4037'; size = 22; }
+        if (type === 'knight') { hp = 200 * waveScale; damage = 30 * waveScale; speed = 0.7; color = '#78909c'; size = 24; }
 
         state.enemies.push({
-          x, y,
-          vx: 0, vy: 0,
-          hp: baseHp, maxHp: baseHp,
-          speed, damage,
-          cooldown: 0, hitFlash: 0,
-          type, size, color, focusFences,
-          strategyOffset: { x: rand(-30, 30), y: rand(-30, 30) },
-          stuckTimer: 0
+          id: Math.random().toString(36).slice(2),
+          type, x, y, vx: 0, vy: 0, hp, maxHp: hp, damage, speed, color, size, hitFlash: 0,
+          aiState: 'attack', aiTimer: 0
         });
       }
+    }
+
+    function distToSegment(p: {x: number, y: number}, seg: any) {
+      const { x1, y1, x2, y2 } = seg;
+      const l2 = Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2);
+      if (l2 === 0) return Math.hypot(p.x - x1, p.y - y1);
+      let t = ((p.x - x1) * (x2 - x1) + (p.y - y1) * (y2 - y1)) / l2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(p.x - (x1 + t * (x2 - x1)), p.y - (y1 + t * (y2 - y1)));
     }
 
     function segmentCenter(seg: any) { return { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }; }
 
     function updateEnemies() {
-      for (let i = 0; i < state.enemies.length; i++) {
-        const enemy = state.enemies[i];
-        if (enemy.hitFlash > 0) enemy.hitFlash--;
-        enemy.cooldown = Math.max(0, enemy.cooldown - 1);
-        
-        // Apply knockback/velocity
-        enemy.x += enemy.vx;
-        enemy.y += enemy.vy;
-        enemy.vx *= 0.85;
-        enemy.vy *= 0.85;
-
-        // Separation (enemies push each other away)
-        for (let j = i + 1; j < state.enemies.length; j++) {
-          const other = state.enemies[j];
-          const dist = Math.hypot(enemy.x - other.x, enemy.y - other.y);
-          if (dist < 18) {
-            const ang = Math.atan2(enemy.y - other.y, enemy.x - other.x);
-            const force = (18 - dist) * 0.05;
-            enemy.vx += Math.cos(ang) * force;
-            enemy.vy += Math.sin(ang) * force;
-            other.vx -= Math.cos(ang) * force;
-            other.vy -= Math.sin(ang) * force;
-          }
-        }
-
-        // Construction collision (Optimized: direct loop)
-        for (const c of state.constructions.houses) {
-          const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-          if (d < 24) {
-            const ang = Math.atan2(enemy.y - c.y, enemy.x - c.x);
-            enemy.x = c.x + Math.cos(ang) * 24;
-            enemy.y = c.y + Math.sin(ang) * 24;
-          }
-        }
-        for (const c of state.constructions.towers) {
-          const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-          if (d < 24) {
-            const ang = Math.atan2(enemy.y - c.y, enemy.x - c.x);
-            enemy.x = c.x + Math.cos(ang) * 24;
-            enemy.y = c.y + Math.sin(ang) * 24;
-          }
-        }
-
-        let target: any = { x: state.campfire.x, y: state.campfire.y, type: 'campfire' };
-
-        if (state.constructions.fenceBuilt && state.constructions.fenceSegments.length) {
-          let bestSeg = null;
-          let bestDist = Infinity;
-          
-          // Armored enemies focus on fences
-          if (enemy.focusFences) {
-            for (const seg of state.constructions.fenceSegments) {
-              const c = segmentCenter(seg);
-              const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-              if (d < bestDist) { bestDist = d; bestSeg = seg; }
-            }
-          } else {
-            // Prioritize gates if they are relatively close
-            const gate = state.constructions.fenceSegments.find(s => s.kind === 'gate');
-            if (gate) {
-              const gc = segmentCenter(gate);
-              const gd = Math.hypot(enemy.x - gc.x, enemy.y - gc.y);
-              if (gd < 180) { // If within "detection" range of gate
-                bestSeg = gate;
-                bestDist = gd;
-              }
-            }
-
-            if (!bestSeg) {
-              for (const seg of state.constructions.fenceSegments) {
-                const c = segmentCenter(seg);
-                const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-                if (d < bestDist) { bestDist = d; bestSeg = seg; }
-              }
-            }
-          }
-
-          if (bestSeg) {
-            const c = segmentCenter(bestSeg);
-            target = { x: c.x, y: c.y, type: 'segment', ref: bestSeg };
-          }
-        }
-
-        // Apply strategic offset to surround target
-        const tx = target.x + (enemy.strategyOffset?.x || 0);
-        const ty = target.y + (enemy.strategyOffset?.y || 0);
-        
-        const dx = tx - enemy.x;
-        const dy = ty - enemy.y;
-        const d = Math.hypot(dx, dy) || 1;
-        
-        // Only move if not being knocked back significantly
-        if (Math.hypot(enemy.vx, enemy.vy) < 0.5) {
-          const prevX = enemy.x;
-          const prevY = enemy.y;
-
-          if (d > 14) {
-            enemy.x += (dx / d) * enemy.speed;
-            enemy.y += (dy / d) * enemy.speed;
-          } else if (enemy.cooldown <= 0) {
-            enemy.cooldown = 48;
-            if (target.type === 'segment' && target.ref) {
-              target.ref.hp -= 8;
-              target.ref.hitFlash = 5;
-              triggerShake(2);
-              addEffect(target.ref.x1 || target.ref.x, target.ref.y1 || target.ref.y, '-8', '#ff5252');
-              addEffect(target.x, target.y - 6, '-8', '#d86b60');
-            } else {
-              state.player.health = clamp(state.player.health - enemy.damage * 8, 0, 100);
-              state.player.hitFlash = 5;
-              triggerShake(4);
-            }
-          }
-
-          // Stuck detection
-          if (Math.hypot(enemy.x - prevX, enemy.y - prevY) < 0.1) {
-            enemy.stuckTimer = (enemy.stuckTimer || 0) + 1;
-            if (enemy.stuckTimer > 60) {
-              enemy.vx += (Math.random() - 0.5) * 2;
-              enemy.vy += (Math.random() - 0.5) * 2;
-              enemy.stuckTimer = 0;
-            }
-          } else {
-            enemy.stuckTimer = 0;
-          }
-        }
-      }
-
-      state.constructions.fenceSegments = state.constructions.fenceSegments.filter(seg => seg.hp > 0);
-      if (state.constructions.fenceBuilt && state.constructions.fenceSegments.length === 0) {
-        state.constructions.fenceBuilt = false;
-        showMessage('A cerca caiu!');
-        closeUpgradePanel();
-      }
-
       state.enemies = state.enemies.filter(e => {
         if (e.hp <= 0 && !e.dying) {
           e.dying = 30; // 30 frames of death animation
           
-          // Loot drop (15% chance)
-          if (Math.random() < 0.15) {
+          // Drop system
+          if (Math.random() < 0.15 + state.wave * 0.01) {
             const r = Math.random();
             let lootType = 'herb';
             let lootName = 'Erva Medicinal';
@@ -984,6 +908,70 @@ export default function App() {
               name: lootName,
               life: 600 // 10s
             });
+          }
+        }
+        
+        if (e.dying === undefined) {
+          // Improved AI
+          e.aiTimer = (e.aiTimer || 0) - 1;
+          
+          // Target selection: Campfire, Player, or nearest construction
+          let targetX = state.campfire.x;
+          let targetY = state.campfire.y;
+          let targetDist = Math.hypot(e.x - targetX, e.y - targetY);
+          
+          const pDist = Math.hypot(e.x - state.player.x, e.y - state.player.y);
+          if (pDist < targetDist) {
+            targetX = state.player.x;
+            targetY = state.player.y;
+            targetDist = pDist;
+          }
+          
+          // Strategic retreat if low health
+          if (e.hp < e.maxHp * 0.2 && e.aiState !== 'retreat') {
+            e.aiState = 'retreat';
+            e.aiTimer = 120;
+          }
+          
+          if (e.aiState === 'retreat') {
+            const ang = Math.atan2(e.y - targetY, e.x - targetX);
+            e.vx += Math.cos(ang) * e.speed * 0.1;
+            e.vy += Math.sin(ang) * e.speed * 0.1;
+            if (e.aiTimer <= 0) e.aiState = 'attack';
+          } else {
+            const ang = Math.atan2(targetY - e.y, targetX - e.x);
+            e.vx += Math.cos(ang) * e.speed * 0.08;
+            e.vy += Math.sin(ang) * e.speed * 0.08;
+          }
+
+          // Friction
+          e.vx *= 0.92;
+          e.vy *= 0.92;
+          e.x += e.vx;
+          e.y += e.vy;
+
+          if (e.hitFlash > 0) e.hitFlash--;
+
+          // Damage player or constructions
+          if (targetDist < e.size + 15) {
+            if (targetX === state.player.x) {
+              const finalDmg = Math.max(1, e.damage - state.player.defense);
+              state.player.health -= finalDmg / 60;
+              state.player.hitFlash = 5;
+            } else if (targetX === state.campfire.x) {
+              state.campfire.hp -= e.damage / 60;
+            }
+          }
+          
+          // Fence collision
+          for (const seg of state.constructions.fenceSegments) {
+            const d = distToSegment({x: e.x, y: e.y}, seg);
+            if (d < e.size + 8) {
+              seg.hp -= e.damage / 60;
+              const ang = Math.atan2(e.y - (seg.y1 + seg.y2)/2, e.x - (seg.x1 + seg.x2)/2);
+              e.vx += Math.cos(ang) * 0.5;
+              e.vy += Math.sin(ang) * 0.5;
+            }
           }
         }
         
@@ -1005,7 +993,7 @@ export default function App() {
           }
         }
         
-        return e.x > -80 && e.x < WIDTH + 80 && e.y > -80 && e.y < HEIGHT + 80;
+        return e.x > -100 && e.x < WIDTH + 100 && e.y > -100 && e.y < HEIGHT + 100;
       });
     }
 
@@ -1018,10 +1006,25 @@ export default function App() {
           addEffect(d.x, d.y - 15, d.name, '#ffd700'); // Golden text
           showQuestMessage(`¡Obteve ${d.name}!`);
           
-          if (d.type === 'sword') state.player.damage += 3;
-          if (d.type === 'ring') state.player.attackCooldown = Math.max(12, state.player.attackCooldown - 6);
-          if (d.type === 'boot') state.player.speed += 0.2;
-          if (d.type === 'herb') state.player.health = Math.min(100, state.player.health + 20);
+          if (d.type === 'sword') {
+            state.player.damage += 3;
+            state.player.equipment.weapon = d;
+          }
+          if (d.type === 'ring') {
+            state.player.attackCooldown = Math.max(12, state.player.attackCooldown - 6);
+            state.player.equipment.accessory = d;
+          }
+          if (d.type === 'boot') {
+            state.player.speed += 0.2;
+          }
+          if (d.type === 'herb') {
+            state.player.health = Math.min(100, state.player.health + 20);
+          }
+          // Armor drop (could be added to enemy drops)
+          if (d.type === 'armor') {
+            state.player.defense += 5;
+            state.player.equipment.armor = d;
+          }
         }
       }
       state.drops = state.drops.filter(d => d.life > 0);
@@ -1161,18 +1164,6 @@ export default function App() {
       }
     }
 
-    function updateHouses() {
-      for (const house of state.constructions.houses) {
-        house.goldTimer += 1;
-        const threshold = Math.max(300, 760 - house.level * 80); // Faster with levels
-        if (house.goldTimer >= threshold) {
-          house.goldTimer = 0;
-          state.player.gold += 1;
-          addEffect(house.x, house.y - 22, '+1 ouro', '#e4c45b');
-        }
-      }
-    }
-
     function updatePlayerCombat() {
       state.player.idleAttackTimer = Math.max(0, state.player.idleAttackTimer - 1);
       state.player.attackTimer = Math.max(0, state.player.attackTimer - 1);
@@ -1290,6 +1281,7 @@ export default function App() {
         state.day += 1;
       }
 
+      updateWave();
       movePlayer();
       autoCollectResources();
       spawnEnemy();
@@ -1297,14 +1289,13 @@ export default function App() {
       updateSummons();
       updateDrops();
       updateDefenders();
-      updateHouses();
       updatePlayerCombat();
       updateEffects();
       state.cameraShake *= 0.88;
 
-      if (state.player.health <= 0) {
+      if (state.player.health <= 0 || state.campfire.hp <= 0) {
         state.status = 'gameover';
-        if (ui.daysSurvived) ui.daysSurvived.textContent = String(state.day);
+        if (ui.daysSurvived) ui.daysSurvived.textContent = String(state.wave);
         if (ui.finalGold) ui.finalGold.textContent = String(state.player.gold);
         if (ui.gameOverOverlay) ui.gameOverOverlay.style.display = 'flex';
         closeUpgradePanel();
@@ -1676,74 +1667,6 @@ export default function App() {
       ctx.fillRect(t.x - 14, t.y - 54, 28 * (t.hp / t.maxHp), 4);
     }
 
-    function drawHouse(h: any) {
-      const selected = selectedConstruction && selectedConstruction.ref === h;
-      const level = h.level || 1;
-      const sizeMult = 1 + (level - 1) * 0.25;
-      
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
-      ctx.beginPath();
-      ctx.ellipse(h.x, h.y + 22 * sizeMult, 26 * sizeMult, 10 * sizeMult, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Walls
-      ctx.fillStyle = level >= 2 ? '#5a4535' : '#6b513b';
-      ctx.fillRect(h.x - 22 * sizeMult, h.y - 10 * sizeMult, 44 * sizeMult, 32 * sizeMult);
-      // Wall shading
-      ctx.fillStyle = 'rgba(0,0,0,0.1)';
-      ctx.fillRect(h.x + 10 * sizeMult, h.y - 10 * sizeMult, 12 * sizeMult, 32 * sizeMult);
-
-      // Roof
-      ctx.fillStyle = level >= 2 ? '#3b2817' : '#a8663f';
-      ctx.beginPath();
-      ctx.moveTo(h.x - 28 * sizeMult, h.y - 10 * sizeMult);
-      ctx.lineTo(h.x, h.y - 36 * sizeMult);
-      ctx.lineTo(h.x + 28 * sizeMult, h.y - 10 * sizeMult);
-      ctx.closePath();
-      ctx.fill();
-
-      // Door
-      ctx.fillStyle = '#2b1e15';
-      ctx.fillRect(h.x - 6 * sizeMult, h.y + 4 * sizeMult, 12 * sizeMult, 18 * sizeMult);
-
-      // Windows
-      ctx.fillStyle = '#fff0b7';
-      if (level >= 2) {
-        ctx.fillRect(h.x - 16 * sizeMult, h.y - 2 * sizeMult, 6 * sizeMult, 6 * sizeMult);
-        ctx.fillRect(h.x + 10 * sizeMult, h.y - 2 * sizeMult, 6 * sizeMult, 6 * sizeMult);
-      }
-
-      // Chimney for level 2+
-      if (level >= 2) {
-        ctx.fillStyle = '#40403a';
-        ctx.fillRect(h.x + 12 * sizeMult, h.y - 30 * sizeMult, 8 * sizeMult, 12 * sizeMult);
-        // Smoke particles? (Handled in updateEffects if needed, but let's add a static puff)
-        ctx.fillStyle = 'rgba(200, 200, 200, 0.4)';
-        ctx.beginPath();
-        ctx.arc(h.x + 16 * sizeMult, h.y - 34 * sizeMult, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      if (selected) {
-        ctx.save();
-        const pulseScale = 1 + Math.sin(state.pulse) * 0.15;
-        ctx.shadowBlur = 22 * pulseScale;
-        ctx.shadowColor = 'rgba(242, 140, 40, 0.9)';
-        ctx.strokeStyle = 'rgba(242, 140, 40, 0.7)';
-        ctx.lineWidth = 8;
-        ctx.strokeRect(h.x - 30 * sizeMult, h.y - 40 * sizeMult, 60 * sizeMult, 68 * sizeMult);
-        ctx.strokeStyle = '#fff0b7';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(h.x - 28 * sizeMult, h.y - 38 * sizeMult, 56 * sizeMult, 64 * sizeMult);
-        ctx.restore();
-      }
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.fillRect(h.x - 18, h.y - 44 * sizeMult, 36, 4);
-      ctx.fillStyle = '#ca6755';
-      ctx.fillRect(h.x - 18, h.y - 44 * sizeMult, 36 * (h.hp / h.maxHp), 4);
-    }
-
     function drawHelper(h: any) {
       const selected = selectedConstruction && selectedConstruction.ref === h;
       const walkFrame = Math.floor((h.walkTimer || 0) / 8) % 2;
@@ -1851,6 +1774,21 @@ export default function App() {
         // Simple Hood/Hat
         ctx.fillRect(h.x - 9, h.y - 16 + bob, 18, 4);
         ctx.fillRect(h.x - 5, h.y - 20 + bob, 10, 4);
+      }
+
+      // Shield for Warrior
+      if (h.type === 'warrior') {
+        ctx.save();
+        ctx.translate(h.x + (h.facing === 'left' ? 10 : -10), h.y + 6 + bob);
+        ctx.fillStyle = '#ffd700';
+        ctx.beginPath();
+        ctx.arc(0, 0, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath();
+        ctx.arc(0, 0, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
 
       // Shield for Warrior
@@ -1987,7 +1925,7 @@ export default function App() {
       }
 
       // Red Cape (Behind)
-      ctx.fillStyle = '#b22222'; // Firebrick
+      ctx.fillStyle = p.equipment.armor ? '#455a64' : '#b22222'; // Armor changes cape to steel
       ctx.beginPath();
       ctx.moveTo(p.x - 10, p.y - 5 + bob);
       ctx.lineTo(p.x + 10, p.y - 5 + bob);
@@ -1996,7 +1934,7 @@ export default function App() {
       ctx.fill();
 
       // Body (Cobalt Blue Tunic)
-      ctx.fillStyle = '#0047AB'; // Cobalt Blue
+      ctx.fillStyle = p.equipment.armor ? '#78909c' : '#0047AB'; 
       ctx.fillRect(p.x - 10, p.y - 2 + bob, 20, 24);
       
       // Belt & Details
@@ -2024,8 +1962,20 @@ export default function App() {
       ctx.fillStyle = '#f5d6ba'; // Skin
       ctx.fillRect(p.x - 8, p.y - 18 + bob, 16, 16);
       
+      // Hair (Classic DQ Spiky Hair)
+      ctx.fillStyle = '#ffcc00'; // Golden Blonde
+      ctx.beginPath();
+      ctx.moveTo(p.x - 8, p.y - 18 + bob);
+      ctx.lineTo(p.x - 12, p.y - 24 + bob);
+      ctx.lineTo(p.x - 4, p.y - 18 + bob);
+      ctx.lineTo(p.x, p.y - 26 + bob);
+      ctx.lineTo(p.x + 4, p.y - 18 + bob);
+      ctx.lineTo(p.x + 12, p.y - 24 + bob);
+      ctx.lineTo(p.x + 8, p.y - 18 + bob);
+      ctx.fill();
+      
       // Helmet (DQ Style)
-      ctx.fillStyle = '#78909c'; // Steel blue
+      ctx.fillStyle = p.equipment.accessory ? '#ffd700' : '#78909c'; // Accessory makes helmet golden
       ctx.beginPath();
       ctx.arc(p.x, p.y - 18 + bob, 10, Math.PI, 0);
       ctx.fill();
@@ -2059,6 +2009,18 @@ export default function App() {
       ctx.fillStyle = '#0047AB';
       ctx.fillRect(p.x - 7, p.y + 22, 5, 8 + legOffset);
       ctx.fillRect(p.x + 2, p.y + 22, 5, 8 - legOffset);
+
+      // Weapon Visual
+      if (p.equipment.weapon) {
+        ctx.save();
+        ctx.translate(p.x + (p.facing === 'left' ? -18 : 18), p.y + 10 + bob);
+        ctx.rotate(p.facing === 'left' ? -Math.PI/4 : Math.PI/4);
+        ctx.fillStyle = '#cfd8dc'; // Steel
+        ctx.fillRect(-2, -15, 4, 15);
+        ctx.fillStyle = '#ffd700'; // Gold hilt
+        ctx.fillRect(-4, 0, 8, 2);
+        ctx.restore();
+      }
 
       // Attack Animation (Slash Arc)
       if (p.attackTimer > 0) {
@@ -2418,49 +2380,126 @@ export default function App() {
     }
 
     function render() {
+      if (!gameState) return;
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
       ctx.save();
-      if (state.cameraShake > 0) {
-        ctx.translate((Math.random() - 0.5) * state.cameraShake, (Math.random() - 0.5) * state.cameraShake);
-      }
+      
+      // Draw Ground
+      ctx.fillStyle = '#1a2418';
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      
+      // Draw Resources
+      gameState.resources.forEach((res: any) => {
+        if (res.respawning) return;
+        ctx.fillStyle = res.type === 'wood' ? '#8b4513' : res.type === 'stone' ? '#808080' : res.type === 'fiber' ? '#32cd32' : '#ffd700';
+        ctx.beginPath();
+        ctx.arc(res.x, res.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+      });
 
-      drawGround();
-      drawAmbientParticles();
+      // Draw Campfire
+      const cf = gameState.campfire;
+      ctx.fillStyle = '#ff4500';
+      ctx.beginPath();
+      ctx.arc(cf.x, cf.y, 20, 0, Math.PI * 2);
+      ctx.fill();
 
-      // Collect all objects for depth sorting
-      const objects: any[] = [
-        ...state.bushes.map(b => ({ y: b.y, draw: () => drawBush(b.x, b.y, b.size) })),
-        ...state.mushrooms.map(m => ({ y: m.y, draw: () => drawMushroom(m.x, m.y) })),
-        ...state.rocks.map(r => ({ y: r.y, draw: () => drawRock(r.x, r.y, r.size) })),
-        ...state.trees.map(t => ({ y: t.y, draw: () => drawTree(t.x, t.y, t.size) })),
-        { y: state.campfire.y, draw: () => drawCampfire() },
-        ...state.constructions.fenceSegments.map(seg => ({ y: (seg.y1 + seg.y2) / 2, draw: () => drawFenceSegment(seg) })),
-        ...state.constructions.houses.map(h => ({ y: h.y, draw: () => drawHouse(h) })),
-        ...state.constructions.towers.map(t => ({ y: t.y, draw: () => drawTower(t) })),
-        ...state.constructions.helpers.map(h => ({ y: h.y, draw: () => drawHelper(h) })),
-        ...state.summons.map(s => ({ y: s.y, draw: () => drawSummon(s) })),
-        ...state.resources.map(res => ({ y: res.y, draw: () => drawResource(res) })),
-        ...state.drops.map(d => ({ y: d.y, draw: () => drawDrop(d) })),
-        { y: state.player.y, draw: () => drawPlayer() },
-        ...state.enemies.map(e => ({ y: e.y, draw: () => drawEnemy(e) })),
-      ];
+      // Draw Enemies
+      gameState.enemies.forEach((e: any) => {
+        ctx.fillStyle = e.color;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, 15, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Health bar
+        ctx.fillStyle = 'red';
+        ctx.fillRect(e.x - 10, e.y - 20, 20, 4);
+        ctx.fillStyle = 'green';
+        ctx.fillRect(e.x - 10, e.y - 20, 20 * (e.hp / e.maxHp), 4);
+      });
 
-      // Sort by Y coordinate
-      objects.sort((a, b) => a.y - b.y);
+      // Draw Players
+      Object.values(gameState.players).forEach((p: any) => {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.beginPath();
+        ctx.ellipse(0, 15, 12, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
 
-      // Draw sorted objects
-      objects.forEach(obj => obj.draw());
+        // Body (DQ Style)
+        ctx.fillStyle = p.id === socketRef.current?.id ? '#4dabf7' : '#ff8787';
+        ctx.beginPath();
+        ctx.arc(0, 0, 15, 0, Math.PI * 2);
+        ctx.fill();
 
-      drawEffects();
-      drawWeather();
-      drawForestEdges();
-      drawDayNight();
+        // Armor Visuals
+        if (p.equipment.armor) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        // Helmet Visuals
+        ctx.fillStyle = '#ffd700';
+        ctx.beginPath();
+        ctx.arc(0, -10, 8, Math.PI, 0);
+        ctx.fill();
+
+        // Weapon Visuals
+        if (p.equipment.weapon) {
+          ctx.fillStyle = '#c0c0c0';
+          ctx.fillRect(10, -10, 5, 20);
+        }
+
+        // Name tag
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(p.name, 0, -25);
+        
+        ctx.restore();
+
+        // Attack animation
+        if (p.attackTimer > 0) {
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 40, p.attackAngle - 0.5, p.attackAngle + 0.5);
+          ctx.stroke();
+        }
+      });
+
+      // Draw Drops
+      gameState.drops.forEach((d: any) => {
+        ctx.fillStyle = '#ffd700';
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
       ctx.restore();
+      updateUI();
     }
 
     function gameLoop() {
-      updateGame();
-      render();
+      if (socketRef.current && isJoined) {
+        const dx = (keys['KeyD'] || keys['ArrowRight'] ? 1 : 0) - (keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0);
+        const dy = (keys['KeyS'] || keys['ArrowDown'] ? 1 : 0) - (keys['KeyW'] || keys['ArrowUp'] ? 1 : 0);
+        
+        if (dx !== 0 || dy !== 0 || joystick.active) {
+          socketRef.current.emit('playerInput', roomId || 'default', { 
+            dx: joystick.active ? joystick.dx : dx, 
+            dy: joystick.active ? joystick.dy : dy 
+          });
+        }
+      }
+
+      if (gameState) {
+        render();
+      }
       requestRef.current = requestAnimationFrame(gameLoop);
     }
 
@@ -2475,11 +2514,104 @@ export default function App() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', updateUI);
     };
-  }, []);
+  }, [isJoined, gameState !== null]);
+
+  if (!isJoined) {
+    return (
+      <div className="lobby-container dq-window">
+        <div className="lobby-card">
+          <h1 className="title">As Crônicas de Hero</h1>
+          <p className="subtitle">Multiplayer Cooperativo</p>
+          
+          <div className="input-group">
+            <label><User size={16} /> Nome do Herói</label>
+            <input 
+              type="text" 
+              placeholder="Ex: Erdrick" 
+              value={playerName} 
+              onChange={(e) => setPlayerName(e.target.value)}
+            />
+          </div>
+          
+          <div className="input-group">
+            <label><Shield size={16} /> Código da Sala</label>
+            <input 
+              type="text" 
+              placeholder="Ex: SALA-123" 
+              value={roomId} 
+              onChange={(e) => setRoomId(e.target.value)}
+            />
+          </div>
+          
+          <button className="btn-start" onClick={() => setIsJoined(true)}>
+            <Play size={20} /> ENTRAR NA AVENTURA
+          </button>
+          
+          <div className="lobby-info">
+            <p>Até 4 jogadores • Ondas de 60s • IA Dinâmica</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
+      {/* Sound Toggle Button */}
+      <button 
+        id="soundBtn"
+        onClick={() => setIsAudioOn(!isAudioOn)}
+        className="fixed top-4 right-4 z-[500] w-12 h-12 bg-black/80 border-2 border-white text-white flex items-center justify-center text-2xl cursor-pointer hover:bg-white hover:text-black transition-colors"
+        title="Alternar Som"
+      >
+        {isAudioOn ? '🔊' : '🔇'}
+      </button>
+
+      {/* Start Wave Button (Prep Phase) */}
+      {gameState && gameState.isPrepPhase && (
+        <button 
+          id="startWaveBtn"
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[500] dq-window px-8 py-3 text-xl font-bold hover:bg-white hover:text-blue-900 transition-colors"
+          onClick={() => socketRef.current?.emit('startWave', roomId || 'default')}
+        >
+          INICIAR ONDA
+        </button>
+      )}
+
+      {/* Upgrade Menu (Multiplayer) */}
+      {hasStarted && gameState && gameState.isPrepPhase && (
+        <div className="upgrade-menu-multi dq-window">
+          <h3>MELHORIAS DO HERÓI</h3>
+          <div className="upgrade-grid">
+            <button onClick={() => socketRef.current?.emit('upgradePlayer', roomId || 'default', 'damage')}>
+              Ataque (+5) <br/> <span>50 Ouro</span>
+            </button>
+            <button onClick={() => socketRef.current?.emit('upgradePlayer', roomId || 'default', 'health')}>
+              Vida (+20) <br/> <span>50 Ouro</span>
+            </button>
+            <button onClick={() => socketRef.current?.emit('upgradePlayer', roomId || 'default', 'speed')}>
+              Velocidade (+0.2) <br/> <span>50 Ouro</span>
+            </button>
+            <button onClick={() => socketRef.current?.emit('upgradePlayer', roomId || 'default', 'cooldown')}>
+              Recarga (-4) <br/> <span>50 Ouro</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="game-wrap">
+        {gameState && (
+          <div className="player-list">
+            {Object.values(gameState.players).map((p: any) => (
+              <div key={p.id} className="player-tag dq-window">
+                <span className="name">{p.name}</span>
+                <div className="hp-mini">
+                  <div className="hp-mini-fill" style={{ width: `${p.health}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <canvas ref={canvasRef} width={860} height={640} />
 
         {/* Dragon Quest HUD */}
@@ -2516,23 +2648,18 @@ export default function App() {
 
         {/* Hotbar / Shop Menu */}
         <div className="hotbar">
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('fence')}>
+          <div className="hotbar-item dq-window">
             <div className="key-hint">1</div>
             <Shield className="icon" />
             <div className="label">Cerca</div>
           </div>
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('tower')}>
+          <div className="hotbar-item dq-window">
             <div className="key-hint">2</div>
             <ArrowUpCircle className="icon" />
             <div className="label">Torre</div>
           </div>
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('house')}>
+          <div className="hotbar-item dq-window">
             <div className="key-hint">3</div>
-            <Home className="icon" />
-            <div className="label">Casa</div>
-          </div>
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('helper')}>
-            <div className="key-hint">4</div>
             <Users className="icon" />
             <div className="label">Soldado</div>
           </div>
@@ -2549,11 +2676,44 @@ export default function App() {
           </div>
         </div>
 
-        <div id="dayBadge" className="day-badge">Dia 1 — Dia</div>
+        {/* HUD Top */}
+        <div className="hud-top" id="hudTop">
+          <div className="hud-left">
+            <div className="stat-card health">
+              <div className="stat-icon"><Heart size={18} fill="#ff5252" color="#ff5252" /></div>
+              <div className="stat-bar-bg"><div className="stat-bar-fill health" id="healthFill"></div></div>
+              <span id="healthText">100 / 100</span>
+            </div>
+            <div className="wave-card">
+              <div className="day-badge" id="dayBadge">ONDA 1</div>
+              <div className="wave-timer" id="waveTimer">Tempo: 60s</div>
+            </div>
+          </div>
+          
+          <div className="hud-right">
+            <div className="resource-grid">
+              <div className="res-item"><Trees size={16} color="#79a950" /> <span id="woodCount">0</span></div>
+              <div className="res-item"><Gem size={16} color="#808074" /> <span id="stoneCount">0</span></div>
+              <div className="res-item"><Hammer size={16} color="#a67b50" /> <span id="fiberCount">0</span></div>
+              <div className="res-item"><Coins size={16} color="#ffd700" /> <span id="goldCount">0</span></div>
+            </div>
+            <button className="sound-btn" id="soundBtn">🔊</button>
+          </div>
+        </div>
+
+        {/* Prep Overlay */}
+        <div id="prepOverlay" className="overlay" style={{ display: 'none' }}>
+          <div className="card dq-window">
+            <h1 style={{ color: '#ffd700' }}>FASE DE PREPARAÇÃO</h1>
+            <p id="prepTimer">Preparação: 15s</p>
+            <p>Escolha seus upgrades e reorganize sua estratégia antes da próxima onda!</p>
+            <button id="startWaveBtn" className="btn-start" onClick={() => socketRef.current?.emit('startWave', roomId || 'default')}>INICIAR ONDA</button>
+          </div>
+        </div>
         <div id="questMessage" className="quest-message">Um Slime se aproxima!</div>
         <div id="messageBox" className="message" />
 
-        <div id="upgradePanel" className="upgrade-panel dq-window">
+        <div id="upgradePanel" className="upgrade-panel dq-window" onClick={(e) => e.stopPropagation()}>
           <h3 id="panelTitle">Torre</h3>
           <p id="panelDesc">Nível 1 • Vida 100/100</p>
           <div className="panel-buttons">
@@ -2564,11 +2724,11 @@ export default function App() {
         </div>
 
         {/* Overlays */}
-        <div id="titleOverlay" className="overlay">
+        <div id="titleOverlay" className="overlay" style={{ display: hasStarted ? 'none' : 'flex' }}>
           <div className="card dq-window">
             <h1>NOBRE NA FLORESTA</h1>
             <p>Defenda seu acampamento dos monstros da floresta! Colete recursos durante o dia e prepare-se para a noite.</p>
-            <button id="startBtn" className="btn-start">INICIAR AVENTURA</button>
+            <button id="startBtn" className="btn-start" onClick={handleStart}>INICIAR AVENTURA</button>
             <div style={{ marginTop: '20px', fontSize: '12px', color: '#888' }}>
               PC: WASD para mover, Clique para atacar, 1-4 para construir<br/>
               Mobile: Joystick e botões na tela
@@ -2589,7 +2749,7 @@ export default function App() {
                 <div id="finalGold" className="summary-value">0</div>
               </div>
             </div>
-            <button id="restartBtn" className="btn-start">TENTAR NOVAMENTE</button>
+            <button id="restartBtn" className="btn-start" onClick={handleRestart}>TENTAR NOVAMENTE</button>
           </div>
         </div>
       </div>
