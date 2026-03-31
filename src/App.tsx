@@ -14,7 +14,37 @@ export default function App() {
   const [remotePlayers, setRemotePlayers] = useState<Record<string, any>>({});
   const [roomsList, setRoomsList] = useState<{ id: string; playerCount: number }[]>([]);
   const [isConnected, setIsConnected] = useState(false);
-  const stateRef = useRef<any>(null);
+  const stateRef = useRef<any>({
+    remotePlayers: {},
+    particles: [],
+    enemies: [],
+    drops: [],
+    resources: [],
+    constructions: {
+      fenceBuilt: false,
+      fenceSegments: [],
+      towers: [],
+      helpers: []
+    },
+    projectiles: [],
+    timeOfDay: 0.42,
+    day: 1,
+    isJoined: false,
+    isHost: false,
+    roomId: '',
+    frame: 0
+  });
+
+  useEffect(() => {
+    if (gameStarted && !isJoined && isConnected) {
+      console.log('Requesting rooms list...');
+      socketRef.current?.emit('request-rooms');
+      const interval = setInterval(() => {
+        socketRef.current?.emit('request-rooms');
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [gameStarted, isJoined, isConnected]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -54,7 +84,9 @@ export default function App() {
     });
 
     socket.on('room-joined', (data) => {
+      console.log('Successfully joined room:', data);
       setIsHost(data.isHost);
+      setIsJoined(true);
       if (stateRef.current) {
         stateRef.current.isHost = data.isHost;
         stateRef.current.roomId = data.roomId;
@@ -72,7 +104,6 @@ export default function App() {
           };
         }
       }
-      console.log('Joined room:', data.roomId, 'Host:', data.isHost);
     });
 
     socket.on('player-joined', (id) => {
@@ -182,16 +213,6 @@ export default function App() {
 
     const WIDTH = canvas.width;
     const HEIGHT = canvas.height;
-
-    // Multiplayer Socket Setup
-    if (isJoined && socketRef.current) {
-      console.log('Attempting to join room:', roomId);
-      if (stateRef.current) {
-        stateRef.current.roomId = roomId;
-        stateRef.current.isJoined = true;
-      }
-      socketRef.current.emit('join-room', roomId);
-    }
 
     const ui = {
       healthText: document.getElementById('healthText'),
@@ -442,6 +463,14 @@ export default function App() {
 
     let state: GameState = initialState();
     stateRef.current = state;
+
+    // Multiplayer Socket Setup - Emit AFTER state is initialized
+    if (isJoined && socketRef.current) {
+      console.log('Emitting join-room for:', roomId);
+      state.roomId = roomId;
+      state.isJoined = true;
+      socketRef.current.emit('join-room', roomId);
+    }
 
     const weatherParticles = Array.from({ length: 55 }, () => ({
       x: rand(0, WIDTH), y: rand(0, HEIGHT), size: rand(1, 3), speedY: rand(0.16, 0.5), drift: rand(-0.12, 0.12)
@@ -3256,7 +3285,7 @@ export default function App() {
                             key={room.id}
                             onClick={() => {
                               setRoomId(room.id);
-                              setIsJoined(true);
+                              socketRef.current?.emit('join-room', room.id);
                             }}
                             className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl hover:bg-blue-500/15 hover:border-blue-400/40 transition-all group text-left"
                           >
@@ -3295,7 +3324,7 @@ export default function App() {
                         onClick={() => {
                           const randomId = Math.floor(Math.random() * 9000 + 1000).toString();
                           setRoomId(randomId);
-                          setIsJoined(true);
+                          socketRef.current?.emit('join-room', randomId);
                         }}
                         className="px-5 py-3 bg-blue-600/20 border-2 border-blue-500/30 rounded-xl text-blue-400 hover:bg-blue-600/30 hover:border-blue-400 transition-all flex items-center gap-2 font-bold"
                         title="Criar Nova Sala"
@@ -3309,7 +3338,7 @@ export default function App() {
                       <button
                         onClick={() => {
                           if (roomId.trim()) {
-                            setIsJoined(true);
+                            socketRef.current?.emit('join-room', roomId.toUpperCase());
                           } else {
                             alert('Digite um ID de sala.');
                           }

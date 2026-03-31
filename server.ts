@@ -44,11 +44,9 @@ async function startServer() {
       playerCount: rooms[id].players.length
     }));
     
-    if (roomList.length > 0 || targetSocket) {
-      console.log(`Broadcasting rooms list (${roomList.length} rooms) to ${targetSocket ? 'socket ' + targetSocket.id : 'everyone'}`);
-      if (roomList.length > 0) {
-        console.log('Active rooms:', JSON.stringify(roomList));
-      }
+    console.log(`Broadcasting rooms list (${roomList.length} rooms) to ${targetSocket ? 'socket ' + targetSocket.id : 'everyone'}`);
+    if (roomList.length > 0) {
+      console.log('Active rooms:', JSON.stringify(roomList));
     }
     
     if (targetSocket) {
@@ -104,13 +102,14 @@ async function startServer() {
     });
 
     socket.on("join-room", (roomId) => {
-      if (!roomId) return;
-      console.log(`User ${socket.id} requesting to join room: "${roomId}"`);
+      if (!roomId) {
+        console.log(`User ${socket.id} attempted to join with empty roomId`);
+        return;
+      }
+      console.log(`User ${socket.id} joining room: "${roomId}"`);
       
       // Leave previous rooms first
-      if (leaveAllRooms(socket.id)) {
-        broadcastRooms();
-      }
+      leaveAllRooms(socket.id);
 
       socket.join(roomId);
       if (!rooms[roomId]) {
@@ -132,6 +131,7 @@ async function startServer() {
       socket.to(roomId).emit("player-joined", socket.id);
       console.log(`User ${socket.id} joined room "${roomId}". Total players: ${rooms[roomId].players.length}`);
       
+      // Broadcast updated room list to everyone
       broadcastRooms();
     });
 
