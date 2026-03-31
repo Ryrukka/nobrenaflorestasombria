@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { Heart, Coins, Trees, Gem, Hammer, Shield, Users, X, ArrowUpCircle, Wrench, Play, Plus, LogIn, Globe } from 'lucide-react';
+import { Heart, Coins, Trees, Gem, Hammer, Shield, Users, X, ArrowUpCircle, Wrench, Play, Plus, LogIn, Globe, PawPrint } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
+
+const DIALOGUES = {
+  ENEMY_SIGHTED: ["Inimigos à vista!", "Defendam a base!", "Alerta!", "Invasores!"],
+  ATTACKING: ["Eu cuido desse!", "Avançando!", "Pela fogueira!", "Ataquem!", "Não passarão!"],
+  COLLECTING: ["Pegando recursos!", "Isso vai ajudar a base.", "Coletando...", "Trabalho duro!"],
+  RETURNING: ["Voltando pra base!", "Carga cheia!", "Missão cumprida.", "Suprimentos chegando!"],
+  IDLE: ["Tudo tranquilo por enquanto...", "Vamos manter a guarda.", "Vigilância total.", "Nada a relatar."]
+};
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -24,7 +32,8 @@ export default function App() {
       fenceBuilt: false,
       fenceSegments: [],
       towers: [],
-      helpers: []
+      helpers: [],
+      dogs: []
     },
     projectiles: [],
     summons: [],
@@ -48,7 +57,7 @@ export default function App() {
       hitFlash: 0, slowed: 0,
       idleAttackTimer: 0
     },
-    campfire: { x: 430, y: 320, health: 100, maxHealth: 100 },
+    campfire: { x: 430, y: 320, hp: 100, maxHp: 100, level: 1, radius: 20 },
     pulse: 0
   });
 
@@ -117,7 +126,8 @@ export default function App() {
             fenceBuilt: false,
             fenceSegments: [],
             towers: [],
-            helpers: []
+            helpers: [],
+            dogs: []
           };
         }
       }
@@ -178,10 +188,16 @@ export default function App() {
 
     socket.on('game-state-synced', (gameState) => {
       if (stateRef.current && !stateRef.current.isHost) {
-        stateRef.current.enemies = gameState.enemies;
-        stateRef.current.drops = gameState.drops;
-        stateRef.current.resources = gameState.resources;
-        stateRef.current.constructions = gameState.constructions;
+        stateRef.current.enemies = gameState.enemies || [];
+        stateRef.current.drops = gameState.drops || [];
+        stateRef.current.resources = gameState.resources || [];
+        stateRef.current.constructions = {
+          ...(gameState.constructions || {}),
+          dogs: gameState.constructions?.dogs || [],
+          helpers: gameState.constructions?.helpers || [],
+          towers: gameState.constructions?.towers || [],
+          fenceSegments: gameState.constructions?.fenceSegments || []
+        };
         stateRef.current.projectiles = gameState.projectiles || [];
         stateRef.current.timeOfDay = gameState.timeOfDay;
         stateRef.current.day = gameState.day;
@@ -268,7 +284,7 @@ export default function App() {
 
     const DAY_SPEED = 0.00028;
     const AUTO_COLLECT_RADIUS = 34;
-    const PC_BUILD_KEYS: Record<string, string> = { '1': 'fence', '2': 'tower', '3': 'helper' };
+    const PC_BUILD_KEYS: Record<string, string> = { 'u': 'campfire' };
 
     function rand(min: number, max: number) { return Math.random() * (max - min) + min; }
     function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
@@ -378,8 +394,67 @@ export default function App() {
       frame: number;
     }
 
-    function initialState(): GameState {
-      const campfire = { x: WIDTH / 2, y: HEIGHT / 2, radius: 122 };
+    const CAMPFIRE_LEVELS = [
+  { level: 1, name: "Acampamento Inicial", cost: { wood: 0, stone: 0, gold: 0 }, towers: 0, helpers: 0, dogs: 0, fence: false },
+  { level: 2, name: "Posto de Vigia", cost: { wood: 15, stone: 8, gold: 0 }, towers: 1, helpers: 0, dogs: 0, fence: true },
+  { level: 3, name: "Pequena Vila", cost: { wood: 30, stone: 15, gold: 5 }, towers: 2, helpers: 1, dogs: 0, fence: true },
+  { level: 4, name: "Forte de Madeira", cost: { wood: 60, stone: 35, gold: 12 }, towers: 3, helpers: 2, dogs: 1, fence: true },
+  { level: 5, name: "Cidadela", cost: { wood: 120, stone: 70, gold: 25 }, towers: 4, helpers: 4, dogs: 2, fence: true },
+  { level: 6, name: "Fortaleza Real", cost: { wood: 200, stone: 120, gold: 50 }, towers: 6, helpers: 6, dogs: 3, fence: true },
+];
+
+function syncBaseDefenses(state: any) {
+  const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level);
+  if (!levelData) return;
+
+  // Sync Fence
+  if (levelData.fence && !state.constructions.fenceBuilt) {
+    state.constructions.fenceBuilt = true;
+    state.constructions.fenceSegments = createFenceSegments(state.campfire);
+  }
+
+  // Sync Towers
+  while (state.constructions.towers.length < levelData.towers) {
+    const slot = state.towerSlots.find(s => !s.used);
+    if (slot) {
+      slot.used = true;
+      state.constructions.towers.push({ x: slot.x, y: slot.y, level: 1, hp: 100, maxHp: 100, damage: 10, range: 130, cooldown: 0 });
+    } else break;
+  }
+
+  // Sync Dogs
+  while (state.constructions.dogs.length < levelData.dogs) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 60;
+    const dx = state.campfire.x + Math.cos(angle) * dist;
+    const dy = state.campfire.y + Math.sin(angle) * dist;
+    state.constructions.dogs.push({
+      x: dx, y: dy, homeX: dx, homeY: dy,
+      level: 1, hp: 80, maxHp: 80, damage: 20, speed: 4.5,
+      cooldown: 0, facing: 'right', walkTimer: 0
+    });
+  }
+
+  // Sync Helpers
+  while (state.constructions.helpers.length < levelData.helpers) {
+    const slot = state.helperSlots.find(s => !s.used);
+    if (slot) {
+      slot.used = true;
+      const types = ['warrior', 'archer', 'mage', 'sniper', 'summoner'];
+      const hType = types[state.constructions.helpers.length % types.length];
+      state.constructions.helpers.push({
+        x: slot.x, y: slot.y, homeX: slot.x, homeY: slot.y,
+        level: 1, type: hType, hp: 100, maxHp: 100,
+        damage: 8, range: 120, cooldown: 0, summonTimer: 0,
+        state: 'idle', target: null as any, attackCooldown: 0,
+        speechCooldown: rand(100, 300), speechText: '', speechTimer: 0
+      });
+    } else break;
+  }
+}
+
+function initialState(): GameState {
+      const campfire = { x: WIDTH / 2, y: HEIGHT / 2, hp: 100, maxHp: 100, level: 1, radius: 122 };
       return {
         status: gameStarted ? 'playing' : 'title',
         day: 1,
@@ -454,7 +529,8 @@ export default function App() {
           fenceBuilt: false,
           fenceSegments: [] as any[],
           towers: [] as any[],
-          helpers: [] as any[]
+          helpers: [] as any[],
+          dogs: [] as any[]
         },
         towerSlots: [
           { x: WIDTH / 2 - 142, y: HEIGHT / 2 - 140, used: false },
@@ -523,7 +599,9 @@ export default function App() {
       if (ui.goldCount) ui.goldCount.textContent = String(state.player.gold);
       
       const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
-      if (ui.dayBadge) ui.dayBadge.textContent = `Dia ${state.day} — ${isNight ? 'Noite' : 'Dia'}`;
+      const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level);
+      const levelName = levelData ? levelData.name : `Nível ${state.campfire.level}`;
+      if (ui.dayBadge) ui.dayBadge.textContent = `${levelName} — Dia ${state.day} (${isNight ? 'Noite' : 'Dia'})`;
       
       const mobile = isMobileLayout();
       if (ui.mobileUI) ui.mobileUI.style.display = mobile ? 'block' : 'none';
@@ -556,19 +634,36 @@ export default function App() {
       if (target.type === 'tower') info += ` • Dano: ${target.ref.damage}`;
       
       if (ui.panelDesc) ui.panelDesc.textContent = info;
+      
+      const upBtn = ui.upgradeBtn as HTMLElement;
+      if (upBtn) {
+        if (target.type === 'campfire') {
+          const nextLevelData = CAMPFIRE_LEVELS.find(l => l.level === target.ref.level + 1);
+          if (nextLevelData) {
+            const cost = nextLevelData.cost;
+            let costStr = '';
+            if (cost.wood > 0) costStr += `${cost.wood}W `;
+            if (cost.stone > 0) costStr += `${cost.stone}S `;
+            if (cost.gold > 0) costStr += `${cost.gold}G `;
+            upBtn.textContent = `Evoluir Base (${costStr})`;
+            upBtn.style.display = 'flex';
+          } else {
+            upBtn.style.display = 'none';
+          }
+        } else if (target.type === 'house') {
+          upBtn.style.display = 'none';
+        } else {
+          const cost = 5 + (target.ref.level * 5);
+          upBtn.textContent = `Melhorar (${cost}G)`;
+          upBtn.style.display = 'flex';
+        }
+      }
+
       if (ui.upgradePanel) {
         ui.upgradePanel.style.display = 'block';
         // Force reflow
         ui.upgradePanel.offsetHeight;
         ui.upgradePanel.classList.add('active');
-        if (target.type === 'house') {
-          // Hide upgrade button for houses
-          const upBtn = ui.upgradeBtn as HTMLElement;
-          if (upBtn) upBtn.style.display = 'none';
-        } else {
-          const upBtn = ui.upgradeBtn as HTMLElement;
-          if (upBtn) upBtn.style.display = 'flex';
-        }
         triggerShake(6);
       }
     }
@@ -657,15 +752,9 @@ export default function App() {
       closeUpgradePanel();
     };
 
+    // Hotbar logic handled via React onClick
     const hotbarItems = document.querySelectorAll('.hotbar-item');
-    const hotbarHandlers = Array.from(hotbarItems).map((item, index) => {
-      return () => {
-        const types = ['fence', 'tower', 'house', 'helper'];
-        buyConstruction(types[index]);
-        addParticles(state.player.x, state.player.y, '#ffd700', 4);
-      };
-    });
-
+    
     // Add listeners
     ui.closePanelBtn?.addEventListener('touchstart', handleClosePanel);
     ui.closePanelBtn?.addEventListener('click', handleClosePanel);
@@ -683,10 +772,6 @@ export default function App() {
     canvas.addEventListener('mousemove', handleCanvasMouseMove);
     canvas.addEventListener('pointerdown', handleCanvasPointerDown);
     canvas.addEventListener('click', handleCanvasClick);
-
-    hotbarItems.forEach((item, index) => {
-      item.addEventListener('click', hotbarHandlers[index]);
-    });
 
     ui.joystickBase?.addEventListener('pointerdown', startJoystick);
     ui.joystickBase?.addEventListener('pointermove', moveJoystick);
@@ -741,8 +826,12 @@ export default function App() {
     }
 
     function getConstructionAt(x: number, y: number) {
+      if (Math.hypot(x - state.campfire.x, y - state.campfire.y) < 30) return { type: 'campfire', label: 'Fogueira', ref: state.campfire };
       for (const tower of state.constructions.towers) {
         if (Math.hypot(x - tower.x, y - tower.y) < 26) return { type: 'tower', label: 'Torre', ref: tower };
+      }
+      for (const dog of state.constructions.dogs) {
+        if (Math.hypot(x - dog.x, y - dog.y) < 20) return { type: 'dog', label: 'Cachorro', ref: dog };
       }
       for (const helper of state.constructions.helpers) {
         if (Math.hypot(x - helper.x, y - helper.y) < 22) return { type: 'helper', label: 'Soldado', ref: helper };
@@ -757,6 +846,28 @@ export default function App() {
     function upgradeConstruction(target: any) {
       const p = state.player;
       const level = target.ref.level || 1;
+      
+      if (target.type === 'campfire') {
+        const nextLevelData = CAMPFIRE_LEVELS.find(l => l.level === level + 1);
+        if (!nextLevelData) return showMessage('Nível máximo da fogueira atingido!');
+        
+        const cost = nextLevelData.cost;
+        if (!canPay(p, cost)) return showMessage(`Upgrade Fogueira: ${cost.wood} madeira, ${cost.stone} pedra, ${cost.gold} ouro`);
+        
+        pay(p, cost);
+        target.ref.level = level + 1;
+        target.ref.maxHp += 200;
+        target.ref.hp = target.ref.maxHp;
+        state.cameraShake = 12;
+        
+        syncBaseDefenses(state);
+        
+        addPulse(target.ref.x, target.ref.y, '#ff9800');
+        addEffect(target.ref.x, target.ref.y - 40, `Fogueira Nível ${target.ref.level}!`, '#ff9800');
+        showMessage(`Base evoluída para: ${nextLevelData.name}!`);
+        return;
+      }
+
       const upgradeCost = 5 + (level * 5); // Gold cost increases per level
 
       if (p.gold < upgradeCost) return showMessage(`Melhorar: ${upgradeCost} ouro`);
@@ -818,69 +929,31 @@ export default function App() {
 
     function buyConstruction(type: string) {
       const p = state.player;
-      if (type === 'fence') {
-        if (!state.constructions.fenceBuilt) {
-          const cost = { wood: 10, stone: 6 };
-          if (!canPay(p, cost)) return showMessage(`Cerca: ${cost.wood} madeira, ${cost.stone} pedra`);
-          pay(p, cost);
-          state.cameraShake = 8;
-          state.constructions.fenceBuilt = true;
-          state.constructions.fenceSegments = createFenceSegments(state.campfire);
-          addEffect(state.campfire.x, state.campfire.y - 42, 'cerca construída!', '#dbc9a9');
-          return showMessage('Cerca construída!');
-        }
-        const cost = { wood: 8, stone: 5 };
-        if (!canPay(p, cost)) return showMessage(`Melhorar Cerca: ${cost.wood} madeira, ${cost.stone} pedra`);
-        pay(p, cost);
-        state.cameraShake = 6;
-        state.constructions.fenceSegments.forEach(seg => { seg.level += 1; seg.maxHp += 80; seg.hp = seg.maxHp; });
-        addEffect(state.campfire.x, state.campfire.y - 42, 'cerca aprimorada!', '#dbc9a9');
-        return showMessage('Cerca aprimorada!');
+      const currentLevel = state.campfire.level;
+      const nextLevelData = CAMPFIRE_LEVELS.find(l => l.level === currentLevel + 1);
+
+      if (!nextLevelData) return showMessage('Nível máximo da base atingido!');
+
+      const cost = nextLevelData.cost;
+      if (!canPay(p, cost)) {
+        let costMsg = 'Recursos insuficientes: ';
+        if (cost.wood > 0) costMsg += `${cost.wood}W `;
+        if (cost.stone > 0) costMsg += `${cost.stone}S `;
+        if (cost.gold > 0) costMsg += `${cost.gold}G `;
+        return showMessage(costMsg);
       }
-      if (type === 'tower') {
-        const slot = state.towerSlots.find(s => !s.used);
-        if (!slot) return showMessage('Nenhum espaço disponível!');
-        const cost = { wood: 8, stone: 4 };
-        if (!canPay(p, cost)) return showMessage(`Torre: ${cost.wood} madeira, ${cost.stone} pedra`);
-        pay(p, cost);
-        state.cameraShake = 8;
-        slot.used = true;
-        state.constructions.towers.push({ x: slot.x, y: slot.y, level: 1, hp: 100, maxHp: 100, damage: 10, range: 130, cooldown: 0 });
-        addEffect(slot.x, slot.y - 22, 'torre construída!', '#d3b071');
-        return showMessage('Torre construída!');
-      }
-      if (type === 'helper') {
-        const slot = state.helperSlots.find(s => !s.used);
-        if (!slot) return showMessage('Nenhum espaço disponível!');
-        const cost = { gold: 8 };
-        if (!canPay(p, cost)) return showMessage(`Soldado: ${cost.gold} ouro`);
-        pay(p, cost);
-        state.cameraShake = 8;
-        slot.used = true;
-        
-        const types = ['warrior', 'archer', 'mage', 'sniper', 'summoner'];
-        const hType = types[state.constructions.helpers.length % types.length];
-        
-        let hData = { 
-          x: slot.x, y: slot.y, 
-          homeX: slot.x, homeY: slot.y, 
-          level: 1, type: hType, 
-          hp: 100, maxHp: 100, 
-          damage: 8, range: 120, 
-          cooldown: 0,
-          summonTimer: 0
-        };
-        
-        if (hType === 'warrior') { hData.hp = 180; hData.maxHp = 180; hData.damage = 16; hData.range = 130; }
-        if (hType === 'sniper') { hData.hp = 80; hData.maxHp = 80; hData.damage = 32; hData.range = 260; hData.cooldown = 100; }
-        if (hType === 'mage') { hData.hp = 90; hData.maxHp = 90; hData.damage = 12; hData.range = 180; hData.cooldown = 60; }
-        if (hType === 'summoner') { hData.hp = 100; hData.maxHp = 100; hData.damage = 0; hData.range = 200; hData.cooldown = 180; }
-        
-        state.constructions.helpers.push(hData);
-        const displayType = hType === 'warrior' ? 'Guerreiro' : hType === 'archer' ? 'Arqueiro' : hType === 'mage' ? 'Mago' : hType === 'sniper' ? 'Atirador' : 'Invocador';
-        addEffect(slot.x, slot.y - 20, `${displayType} alistado!`, '#8ed170');
-        return showMessage(`${displayType} alistado!`);
-      }
+
+      pay(p, cost);
+      state.campfire.level += 1;
+      state.campfire.maxHp += 200;
+      state.campfire.hp = state.campfire.maxHp;
+      state.cameraShake = 10;
+      
+      syncBaseDefenses(state);
+      
+      addEffect(state.campfire.x, state.campfire.y - 42, `Base Nível ${state.campfire.level}!`, '#ffd700');
+      showMessage(`Base evoluída para: ${nextLevelData.name}!`);
+      updateUI();
     }
 
     // Joystick Logic
@@ -993,6 +1066,16 @@ export default function App() {
             if (distToHelper <= 25) {
               collectedBy = h;
               break;
+            }
+          }
+          // Check dogs
+          if (!collectedBy) {
+            for (const d of state.constructions.dogs) {
+              const distToDog = Math.hypot(d.x - res.x, d.y - res.y);
+              if (distToDog <= 30) {
+                collectedBy = d;
+                break;
+              }
             }
           }
         }
@@ -1494,6 +1577,45 @@ export default function App() {
     }
 
     function updateDefenders() {
+      // Dogs
+      for (const dog of state.constructions.dogs) {
+        dog.cooldown = Math.max(0, dog.cooldown - 1);
+        let target = null;
+        let best = Infinity;
+        for (const enemy of state.enemies) {
+          const d = Math.hypot(dog.x - enemy.x, dog.y - enemy.y);
+          if (d < 250 && d < best) { best = d; target = enemy; }
+        }
+
+        if (target) {
+          const ang = Math.atan2(target.y - dog.y, target.x - dog.x);
+          const dist = Math.hypot(target.x - dog.x, target.y - dog.y);
+          dog.facing = target.x < dog.x ? 'left' : 'right';
+          if (dist > 20) {
+            dog.x += Math.cos(ang) * dog.speed;
+            dog.y += Math.sin(ang) * dog.speed;
+            dog.walkTimer = (dog.walkTimer || 0) + 1;
+          } else if (dog.cooldown === 0) {
+            target.hp -= dog.damage;
+            target.hitFlash = 5;
+            target.vx += Math.cos(ang) * 5;
+            target.vy += Math.sin(ang) * 5;
+            dog.cooldown = 40;
+            addPulse(target.x, target.y, '#a1887f');
+          }
+        } else {
+          // Patrol or return home
+          const distToHome = Math.hypot(dog.x - dog.homeX, dog.y - dog.homeY);
+          if (distToHome > 10) {
+            const ang = Math.atan2(dog.homeY - dog.y, dog.homeX - dog.x);
+            dog.x += Math.cos(ang) * (dog.speed * 0.5);
+            dog.y += Math.sin(ang) * (dog.speed * 0.5);
+            dog.facing = dog.homeX < dog.x ? 'left' : 'right';
+            dog.walkTimer = (dog.walkTimer || 0) + 1;
+          }
+        }
+      }
+
       // Static Towers
       for (const tower of state.constructions.towers) {
         tower.cooldown = Math.max(0, tower.cooldown - 1);
@@ -1518,235 +1640,222 @@ export default function App() {
       }
 
       // Dynamic Helpers
+      const claimedTargets = new Set();
       for (const h of state.constructions.helpers) {
         h.cooldown = Math.max(0, h.cooldown - 1);
-        
+        h.attackCooldown = Math.max(0, h.attackCooldown - 1);
+        h.speechTimer = Math.max(0, h.speechTimer - 1);
+        h.speechCooldown = Math.max(0, h.speechCooldown - 1);
+
         let target = null;
-        let best = Infinity;
+        let newState = 'idle';
         
-        // 1. Look for enemies in range
+        // Priority 1: Defend Base
+        const baseProtectionRadius = 250;
+        let nearestEnemyNearBase = null;
+        let minDistBase = Infinity;
         for (const enemy of state.enemies) {
-          const d = Math.hypot(h.x - enemy.x, h.y - enemy.y);
-          if (d < h.range && d < best) { best = d; target = enemy; }
-        }
-
-        // 2. If no enemy in range, look for resources to collect
-        let resourceTarget = null;
-        if (!target) {
-          let bestResDist = Infinity;
-          for (const res of state.resources) {
-            if (res.respawning) continue;
-            const d = Math.hypot(h.x - res.x, h.y - res.y);
-            if (d < 250 && d < bestResDist) {
-              bestResDist = d;
-              resourceTarget = res;
+          if (claimedTargets.has(enemy)) continue;
+          const distToBase = Math.hypot(enemy.x - state.campfire.x, enemy.y - state.campfire.y);
+          if (distToBase < baseProtectionRadius) {
+            const distToHelper = Math.hypot(enemy.x - h.x, enemy.y - h.y);
+            if (distToHelper < minDistBase) {
+              minDistBase = distToHelper;
+              nearestEnemyNearBase = enemy;
             }
           }
         }
 
-        // 3. If no resource, look for enemies further away (hunting)
-        if (!target && !resourceTarget) {
-          let bestHuntDist = Infinity;
-          for (const enemy of state.enemies) {
-            const d = Math.hypot(h.x - enemy.x, h.y - enemy.y);
-            if (d < 400 && d < bestHuntDist) {
-              bestHuntDist = d;
-              target = enemy;
-            }
-          }
-        }
-
-        // Movement and Action Logic based on type
-        if (h.type === 'warrior') {
-          if (target) {
-            const ang = Math.atan2(target.y - h.y, target.x - h.x);
-            const dist = Math.hypot(target.x - h.x, target.y - h.y);
-            h.facing = target.x < h.x ? 'left' : 'right';
-            if (dist > 22) {
-              h.x += Math.cos(ang) * 3.0;
-              h.y += Math.sin(ang) * 3.0;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-            } else if (h.cooldown === 0) {
-              target.hp -= h.damage;
-              target.hitFlash = 5;
-              target.vx += Math.cos(ang) * 4;
-              target.vy += Math.sin(ang) * 4;
-              h.cooldown = h.level >= 4 ? 24 : 32;
-              addEffect(target.x, target.y, `-${h.damage}`, '#ff5252');
-              state.particles.push({
-                x: (h.x + target.x) / 2,
-                y: (h.y + target.y) / 2,
-                vx: 0, vy: 0,
-                life: 0.2,
-                size: 20,
-                color: h.level >= 3 ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255, 255, 255, 0.6)',
-                type: 'slash'
-              });
-              if (target.hp <= 0) { state.player.gold += 1; }
-            }
-          } else if (resourceTarget) {
-            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
-            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
-            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
-            if (dist > 5) {
-              h.x += Math.cos(ang) * 2.5;
-              h.y += Math.sin(ang) * 2.5;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-            }
-          } else {
-            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
-            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
-            if (dist > 3) {
-              h.x += Math.cos(ang) * 2.0;
-              h.y += Math.sin(ang) * 2.0;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-              h.facing = h.homeX < h.x ? 'left' : 'right';
-            } else {
-              h.walkTimer = 0;
-            }
-          }
-        } else if (h.type === 'mage') {
-          if (target) {
-            const ang = Math.atan2(target.y - h.y, target.x - h.x);
-            const dist = Math.hypot(target.x - h.x, target.y - h.y);
-            h.facing = target.x < h.x ? 'left' : 'right';
-            
-            if (dist > 150) {
-              h.x += Math.cos(ang) * 2.5;
-              h.y += Math.sin(ang) * 2.5;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-            } else if (h.cooldown === 0) {
-              h.cooldown = 60;
-              addPulse(h.x, h.y, '#9c27b0');
-              state.particles.push({
-                x: h.x, y: h.y,
-                vx: (target.x - h.x) * 0.05,
-                vy: (target.y - h.y) * 0.05,
-                life: 0.5,
-                size: 15,
-                color: h.level >= 3 ? '#e1bee7' : '#ba68c8',
-                type: 'cloud'
-              });
-              const aoeRange = h.level >= 3 ? 90 : 65;
-              for (const e of state.enemies) {
-                const ed = Math.hypot(target.x - e.x, target.y - e.y);
-                if (ed < aoeRange) {
-                  e.hp -= h.damage * 1.5;
-                  e.hitFlash = 5;
-                  if (h.level >= 4) {
-                    e.slowTimer = (e.slowTimer || 0) + 120;
-                    addEffect(e.x, e.y - 10, 'CONGELADO!', '#4fc3f7');
-                  }
-                  addEffect(e.x, e.y, `-${Math.round(h.damage * 1.5)}`, '#ba68c8');
-                  if (e.hp <= 0) { state.player.gold += 1; }
-                }
-              }
-              addPulse(target.x, target.y, h.level >= 3 ? '#ba68c8' : '#e1bee7');
-              triggerShake(2);
-            }
-          } else if (resourceTarget) {
-            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
-            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
-            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
-            if (dist > 5) {
-              h.x += Math.cos(ang) * 2.2;
-              h.y += Math.sin(ang) * 2.2;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-            }
-          } else {
-            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
-            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
-            if (dist > 3) {
-              h.x += Math.cos(ang) * 1.8;
-              h.y += Math.sin(ang) * 1.8;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-              h.facing = h.homeX < h.x ? 'left' : 'right';
-            } else {
-              h.walkTimer = 0;
-            }
-          }
-        } else if (h.type === 'summoner') {
-          if (target) h.facing = target.x < h.x ? 'left' : 'right';
-          if (h.cooldown === 0) {
-            h.cooldown = 240;
-            addPulse(h.x, h.y, '#4db6ac');
-            const summonCount = h.level >= 3 ? 2 : 1;
-            for (let sIdx = 0; sIdx < summonCount; sIdx++) {
-              state.summons.push({
-                x: h.x + rand(-20, 20),
-                y: h.y + rand(-20, 20),
-                hp: 50 + h.level * 10,
-                maxHp: 50 + h.level * 10,
-                damage: 5 + h.level * 2,
-                life: 600,
-                type: h.level >= 4 ? 'golem' : 'spirit',
-                cooldown: 0
-              });
-            }
-          }
-          if (!target && resourceTarget) {
-            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
-            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
-            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
-            if (dist > 5) {
-              h.x += Math.cos(ang) * 2.0;
-              h.y += Math.sin(ang) * 2.0;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-            }
-          } else if (!target) {
-            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
-            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
-            if (dist > 3) {
-              h.x += Math.cos(ang) * 1.5;
-              h.y += Math.sin(ang) * 1.5;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-              h.facing = h.homeX < h.x ? 'left' : 'right';
-            } else {
-              h.walkTimer = 0;
-            }
+        if (nearestEnemyNearBase) {
+          target = nearestEnemyNearBase;
+          newState = 'defending';
+          if (h.state !== 'defending' && h.speechCooldown === 0) {
+            h.speechText = DIALOGUES.ENEMY_SIGHTED[Math.floor(Math.random() * DIALOGUES.ENEMY_SIGHTED.length)];
+            h.speechTimer = 120;
+            h.speechCooldown = 300;
           }
         } else {
-          // Archer / Sniper
-          if (target) {
-            const ang = Math.atan2(target.y - h.y, target.x - h.x);
-            const dist = Math.hypot(target.x - h.x, target.y - h.y);
-            h.facing = target.x < h.x ? 'left' : 'right';
-            
-            if (h.cooldown === 0) {
-              const isSniper = h.type === 'sniper';
-              let finalDamage = h.damage;
-              if (isSniper && h.level >= 4) finalDamage *= 2;
-              const isCrit = !isSniper && h.level >= 4 && Math.random() < 0.15;
-              if (isCrit) finalDamage *= 2;
-
-              target.hp -= finalDamage;
-              target.hitFlash = 5;
-              h.cooldown = isSniper ? 110 : 28;
-              if (!isSniper && h.level >= 3 && Math.random() < 0.2) h.cooldown = 5;
-
-              addEffect(target.x, target.y, `-${Math.round(finalDamage)}`, isCrit ? '#ffd700' : '#ff5252');
-              addPulse(target.x, target.y, isSniper ? '#ff4444' : '#f1d28c');
-              if (target.hp <= 0) { state.player.gold += 1; }
+          // Priority 2: Attack Enemies on Map
+          let nearestEnemy = null;
+          let minDistEnemy = Infinity;
+          for (const enemy of state.enemies) {
+            if (claimedTargets.has(enemy)) continue;
+            const d = Math.hypot(h.x - enemy.x, h.y - enemy.y);
+            if (d < minDistEnemy) {
+              minDistEnemy = d;
+              nearestEnemy = enemy;
             }
-          } else if (resourceTarget) {
-            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
-            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
-            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
-            if (dist > 5) {
-              h.x += Math.cos(ang) * 2.2;
-              h.y += Math.sin(ang) * 2.2;
-              h.walkTimer = (h.walkTimer || 0) + 1;
+          }
+
+          if (nearestEnemy) {
+            target = nearestEnemy;
+            newState = 'attacking';
+            if (h.state !== 'attacking' && h.speechCooldown === 0) {
+              h.speechText = DIALOGUES.ATTACKING[Math.floor(Math.random() * DIALOGUES.ATTACKING.length)];
+              h.speechTimer = 120;
+              h.speechCooldown = 400;
             }
           } else {
-            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
-            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
-            if (dist > 3) {
-              h.x += Math.cos(ang) * 2.0;
-              h.y += Math.sin(ang) * 2.0;
-              h.walkTimer = (h.walkTimer || 0) + 1;
-              h.facing = h.homeX < h.x ? 'left' : 'right';
+            // Priority 3: Collect Resources
+            let nearestRes = null;
+            let minDistRes = Infinity;
+            for (const res of state.resources) {
+              if (res.respawning || claimedTargets.has(res)) continue;
+              const d = Math.hypot(h.x - res.x, h.y - res.y);
+              if (d < minDistRes) {
+                minDistRes = d;
+                nearestRes = res;
+              }
+            }
+
+            if (nearestRes) {
+              target = nearestRes;
+              newState = 'collecting';
+              if (h.state !== 'collecting' && h.speechCooldown === 0) {
+                h.speechText = DIALOGUES.COLLECTING[Math.floor(Math.random() * DIALOGUES.COLLECTING.length)];
+                h.speechTimer = 120;
+                h.speechCooldown = 500;
+              }
             } else {
-              h.walkTimer = 0;
+              // Idle / Return Home
+              target = { x: h.homeX, y: h.homeY };
+              newState = 'idle';
+              if (h.state !== 'idle' && h.speechCooldown === 0) {
+                h.speechText = DIALOGUES.IDLE[Math.floor(Math.random() * DIALOGUES.IDLE.length)];
+                h.speechTimer = 120;
+                h.speechCooldown = 600;
+              }
+            }
+          }
+        }
+
+        h.state = newState;
+        h.target = target;
+        if (target && target.hp !== undefined) claimedTargets.add(target);
+        else if (target && target.type !== undefined) claimedTargets.add(target);
+
+        // Movement and Action
+        if (target) {
+          const ang = Math.atan2(target.y - h.y, target.x - h.x);
+          const dist = Math.hypot(target.x - h.x, target.y - h.y);
+          h.facing = target.x < h.x ? 'left' : 'right';
+
+          let interactionDist = 25;
+          if (h.type === 'archer' || h.type === 'sniper') interactionDist = h.range * 0.8;
+          if (h.type === 'mage' || h.type === 'summoner') interactionDist = h.range * 0.7;
+          if (h.state === 'idle') interactionDist = 5;
+
+          if (dist > interactionDist) {
+            const speed = h.state === 'idle' ? 1.5 : 2.5;
+            h.x += Math.cos(ang) * speed;
+            h.y += Math.sin(ang) * speed;
+            h.walkTimer = (h.walkTimer || 0) + 1;
+          } else {
+            h.walkTimer = 0;
+            // Action logic
+            if (h.state === 'defending' || h.state === 'attacking') {
+              if (h.type === 'warrior') {
+                if (h.cooldown === 0) {
+                  target.hp -= h.damage;
+                  target.hitFlash = 5;
+                  target.vx += Math.cos(ang) * 4;
+                  target.vy += Math.sin(ang) * 4;
+                  h.cooldown = h.level >= 4 ? 24 : 32;
+                  addEffect(target.x, target.y, `-${h.damage}`, '#ff5252');
+                  state.particles.push({
+                    x: (h.x + target.x) / 2,
+                    y: (h.y + target.y) / 2,
+                    vx: 0, vy: 0,
+                    life: 0.2,
+                    size: 20,
+                    color: h.level >= 3 ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255, 255, 255, 0.6)',
+                    type: 'slash'
+                  });
+                  if (target.hp <= 0) { state.player.gold += 1; }
+                }
+              } else if (h.type === 'mage') {
+                if (h.cooldown === 0) {
+                  h.cooldown = 60;
+                  addPulse(h.x, h.y, '#9c27b0');
+                  state.particles.push({
+                    x: h.x, y: h.y,
+                    vx: (target.x - h.x) * 0.05,
+                    vy: (target.y - h.y) * 0.05,
+                    life: 0.5,
+                    size: 15,
+                    color: h.level >= 3 ? '#e1bee7' : '#ba68c8',
+                    type: 'cloud'
+                  });
+                  const aoeRange = h.level >= 3 ? 90 : 65;
+                  for (const e of state.enemies) {
+                    const ed = Math.hypot(target.x - e.x, target.y - e.y);
+                    if (ed < aoeRange) {
+                      e.hp -= h.damage * 1.5;
+                      e.hitFlash = 5;
+                      if (h.level >= 4) {
+                        e.slowTimer = (e.slowTimer || 0) + 120;
+                        addEffect(e.x, e.y - 10, 'CONGELADO!', '#4fc3f7');
+                      }
+                      addEffect(e.x, e.y, `-${Math.round(h.damage * 1.5)}`, '#ba68c8');
+                      if (e.hp <= 0) { state.player.gold += 1; }
+                    }
+                  }
+                  addPulse(target.x, target.y, h.level >= 3 ? '#ba68c8' : '#e1bee7');
+                  triggerShake(2);
+                }
+              } else if (h.type === 'summoner') {
+                if (h.cooldown === 0) {
+                  h.cooldown = 240;
+                  addPulse(h.x, h.y, '#4db6ac');
+                  const summonCount = h.level >= 3 ? 2 : 1;
+                  for (let sIdx = 0; sIdx < summonCount; sIdx++) {
+                    state.summons.push({
+                      x: h.x + rand(-20, 20),
+                      y: h.y + rand(-20, 20),
+                      hp: 50 + h.level * 10,
+                      maxHp: 50 + h.level * 10,
+                      damage: 5 + h.level * 2,
+                      life: 600,
+                      type: h.level >= 4 ? 'golem' : 'spirit',
+                      cooldown: 0
+                    });
+                  }
+                }
+              } else {
+                // Archer / Sniper
+                if (h.cooldown === 0) {
+                  const isSniper = h.type === 'sniper';
+                  let finalDamage = h.damage;
+                  if (isSniper && h.level >= 4) finalDamage *= 2;
+                  const isCrit = !isSniper && h.level >= 4 && Math.random() < 0.15;
+                  if (isCrit) finalDamage *= 2;
+                  target.hp -= finalDamage;
+                  target.hitFlash = 5;
+                  h.cooldown = isSniper ? 110 : 28;
+                  if (!isSniper && h.level >= 3 && Math.random() < 0.2) h.cooldown = 5;
+                  addEffect(target.x, target.y, `-${Math.round(finalDamage)}`, isCrit ? '#ffd700' : '#ff5252');
+                  addPulse(target.x, target.y, isSniper ? '#ff4444' : '#f1d28c');
+                  if (target.hp <= 0) { state.player.gold += 1; }
+                }
+              }
+            } else if (h.state === 'collecting') {
+              if (h.cooldown === 0) {
+                h.cooldown = 40;
+                const amount = 1 + Math.floor(h.level / 2);
+                if (target.type === 'wood') state.player.wood += amount;
+                else if (target.type === 'stone') state.player.stone += amount;
+                else if (target.type === 'fiber') state.player.fiber += amount;
+                else if (target.type === 'gold') state.player.gold += amount;
+                addEffect(target.x, target.y, `+${amount} ${target.type}`, '#8ed170');
+                target.respawning = true;
+                target.respawnTimer = 600;
+                h.state = 'idle';
+                if (h.speechCooldown === 0) {
+                  h.speechText = DIALOGUES.RETURNING[Math.floor(Math.random() * DIALOGUES.RETURNING.length)];
+                  h.speechTimer = 120;
+                  h.speechCooldown = 400;
+                }
+              }
             }
           }
         }
@@ -2134,45 +2243,61 @@ export default function App() {
       const fire = state.campfire;
       const t = performance.now() * 0.01;
       const flicker = Math.sin(t * 0.95) * 2.1;
+      const level = fire.level || 1;
 
       // Glow
-      const glow = ctx.createRadialGradient(fire.x, fire.y, 0, fire.x, fire.y, fire.radius + 42 + flicker);
+      const glowRange = 42 + (level * 10) + flicker;
+      const glow = ctx.createRadialGradient(fire.x, fire.y, 0, fire.x, fire.y, glowRange);
       glow.addColorStop(0, 'rgba(255,180,83,0.32)');
       glow.addColorStop(0.55, 'rgba(229,114,43,0.16)');
       glow.addColorStop(1, 'rgba(229,114,43,0)');
       ctx.fillStyle = glow;
       ctx.beginPath();
-      ctx.arc(fire.x, fire.y, fire.radius + 42 + flicker, 0, Math.PI * 2);
+      ctx.arc(fire.x, fire.y, glowRange, 0, Math.PI * 2);
       ctx.fill();
 
       // Shadow
       ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.beginPath();
-      ctx.ellipse(fire.x, fire.y + 18, 28, 11, 0, 0, Math.PI * 2);
+      ctx.ellipse(fire.x, fire.y + 18, 28 + level * 4, 11 + level * 2, 0, 0, Math.PI * 2);
       ctx.fill();
+
+      // Stones around the fire
+      const stoneCount = 6 + level * 2;
+      for (let i = 0; i < stoneCount; i++) {
+        const ang = (i / stoneCount) * Math.PI * 2;
+        const dist = 22 + level * 2;
+        const sx = fire.x + Math.cos(ang) * dist;
+        const sy = fire.y + Math.sin(ang) * dist;
+        ctx.fillStyle = i % 2 === 0 ? '#4a4a4a' : '#616161';
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, 6, 4, ang, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Logs
       ctx.fillStyle = '#3a2515'; 
       ctx.save();
       ctx.translate(fire.x, fire.y + 8);
-      ctx.rotate(0.75);
-      ctx.fillRect(-16, -3, 32, 6);
-      ctx.rotate(-1.5);
-      ctx.fillRect(-16, -3, 32, 6);
+      const logCount = 2 + Math.floor(level / 2);
+      for (let i = 0; i < logCount; i++) {
+        ctx.rotate((Math.PI * 2) / logCount);
+        ctx.fillRect(-16 - level, -3, 32 + level * 2, 6);
+      }
       ctx.restore();
 
       // Flames (Pixelated style)
-      const flameCount = 4;
+      const flameCount = 3 + level;
       for (let i = 0; i < flameCount; i++) {
         const ft = t + i * 1.5;
-        const fx = fire.x + Math.sin(ft * 0.6) * 5;
+        const fx = fire.x + Math.sin(ft * 0.6) * (5 + level);
         const fy = fire.y - 4 - i * 7 + Math.cos(ft * 0.9) * 4;
-        const fs = 14 - i * 3 + flicker;
+        const fs = 14 - i * 2 + flicker + level;
         
         ctx.fillStyle = i === 0 ? '#ff4d00' : i === 1 ? '#ff9500' : i === 2 ? '#ffea00' : '#ffffff';
         ctx.beginPath();
         ctx.moveTo(fx - fs, fy);
-        ctx.lineTo(fx, fy - fs * 2.2);
+        ctx.lineTo(fx, fy - fs * (2.2 + level * 0.1));
         ctx.lineTo(fx + fs, fy);
         ctx.closePath();
         ctx.fill();
@@ -2312,6 +2437,45 @@ export default function App() {
       ctx.fillRect(t.x - 14, t.y - 54, 28, 4);
       ctx.fillStyle = '#ca6755';
       ctx.fillRect(t.x - 14, t.y - 54, 28 * (t.hp / t.maxHp), 4);
+    }
+
+    function drawDog(dog: any) {
+      const { x, y, facing, walkTimer } = dog;
+      const bounce = Math.abs(Math.sin(walkTimer * 0.2)) * 3;
+      
+      ctx.save();
+      ctx.translate(x, y - bounce);
+      if (facing === 'left') ctx.scale(-1, 1);
+
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.beginPath();
+      ctx.ellipse(0, bounce + 10, 12, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Body
+      ctx.fillStyle = '#8d6e63';
+      ctx.fillRect(-10, -8, 20, 10);
+      
+      // Head
+      ctx.fillStyle = '#795548';
+      ctx.fillRect(6, -14, 8, 8);
+      
+      // Ears
+      ctx.fillStyle = '#5d4037';
+      ctx.fillRect(10, -16, 4, 4);
+      
+      // Tail
+      ctx.fillStyle = '#8d6e63';
+      ctx.fillRect(-14, -6, 4, 4);
+
+      // Legs
+      ctx.fillStyle = '#5d4037';
+      const legOffset = Math.sin(walkTimer * 0.2) * 4;
+      ctx.fillRect(-8, 2, 4, 4 + legOffset);
+      ctx.fillRect(4, 2, 4, 4 - legOffset);
+
+      ctx.restore();
     }
 
     function drawHelper(h: any) {
@@ -2525,6 +2689,40 @@ export default function App() {
       ctx.fillRect(h.x - 12, h.y - 26, 24, 3);
       ctx.fillStyle = '#ca6755';
       ctx.fillRect(h.x - 12, h.y - 26, 24 * (h.hp / h.maxHp), 3);
+
+      // Dialogue Bubble
+      if (h.speechText && h.speechTimer > 0) {
+        ctx.save();
+        ctx.font = 'bold 10px Arial';
+        const textWidth = ctx.measureText(h.speechText).width;
+        const padding = 6;
+        const bubbleWidth = textWidth + padding * 2;
+        const bubbleHeight = 20;
+        const bx = h.x - bubbleWidth / 2;
+        const by = h.y - 45 + bob;
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        
+        ctx.beginPath();
+        ctx.rect(bx, by, bubbleWidth, bubbleHeight);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(h.x - 4, by + bubbleHeight);
+        ctx.lineTo(h.x + 4, by + bubbleHeight);
+        ctx.lineTo(h.x, by + bubbleHeight + 5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#000';
+        ctx.textAlign = 'center';
+        ctx.fillText(h.speechText, h.x, by + 14);
+        ctx.restore();
+      }
     }
 
     function drawResource(res: any) {
@@ -3191,6 +3389,7 @@ export default function App() {
         { y: state.campfire.y, draw: () => drawCampfire() },
         ...state.constructions.fenceSegments.map(seg => ({ y: (seg.y1 + seg.y2) / 2, draw: () => drawFenceSegment(seg) })),
         ...state.constructions.towers.map(t => ({ y: t.y, draw: () => drawTower(t) })),
+        ...state.constructions.dogs.map(d => ({ y: d.y, draw: () => drawDog(d) })),
         ...state.constructions.helpers.map(h => ({ y: h.y, draw: () => drawHelper(h) })),
         ...state.summons.map(s => ({ y: s.y, draw: () => drawSummon(s) })),
         ...state.resources.map(res => ({ y: res.y, draw: () => drawResource(res) })),
@@ -3249,10 +3448,6 @@ export default function App() {
       canvas.removeEventListener('mousemove', handleCanvasMouseMove);
       canvas.removeEventListener('pointerdown', handleCanvasPointerDown);
       canvas.removeEventListener('click', handleCanvasClick);
-
-      hotbarItems.forEach((item, index) => {
-        item.removeEventListener('click', hotbarHandlers[index]);
-      });
 
       ui.joystickBase?.removeEventListener('pointerdown', startJoystick);
       ui.joystickBase?.removeEventListener('pointermove', moveJoystick);
@@ -3315,20 +3510,10 @@ export default function App() {
 
         {/* Hotbar / Shop Menu */}
         <div className="hotbar">
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('fence')}>
-            <div className="key-hint">1</div>
-            <Shield className="icon" />
-            <div className="label">Cerca</div>
-          </div>
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('tower')}>
-            <div className="key-hint">2</div>
+          <div className="hotbar-item dq-window w-full max-w-[240px]" onClick={() => (window as any).buyConstruction?.('campfire')}>
+            <div className="key-hint">U</div>
             <ArrowUpCircle className="icon" />
-            <div className="label">Torre</div>
-          </div>
-          <div className="hotbar-item dq-window" onClick={() => (window as any).buyConstruction?.('helper')}>
-            <div className="key-hint">3</div>
-            <Users className="icon" />
-            <div className="label">Soldado</div>
+            <div className="label">Evoluir Base</div>
           </div>
         </div>
 
