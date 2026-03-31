@@ -51,17 +51,20 @@ export default function App() {
 
       socket.on('room-joined', (data) => {
         setIsHost(data.isHost);
+        state.isHost = data.isHost;
         console.log('Joined room:', data.roomId, 'Host:', data.isHost);
       });
 
       socket.on('player-joined', (id) => {
         console.log('Player joined:', id);
-        setRemotePlayers(prev => ({ ...prev, [id]: { x: WIDTH / 2, y: HEIGHT / 2, health: 100, maxHealth: 100 } }));
+        state.remotePlayers[id] = { x: WIDTH / 2, y: HEIGHT / 2, health: 100, maxHealth: 100 };
+        setRemotePlayers({ ...state.remotePlayers });
       });
 
       socket.on('player-moved', (data) => {
         const { id, ...playerData } = data;
-        setRemotePlayers(prev => ({ ...prev, [id]: { ...prev[id], ...playerData } }));
+        state.remotePlayers[id] = { ...state.remotePlayers[id], ...playerData };
+        setRemotePlayers({ ...state.remotePlayers });
       });
 
       socket.on('remote-attack', (data) => {
@@ -76,10 +79,40 @@ export default function App() {
           color: 'rgba(255, 255, 255, 0.4)',
           type: 'slash'
         });
+
+        // If we are host, apply damage from remote player's attack
+        if (state.isHost) {
+          const range = 65;
+          for (const enemy of state.enemies) {
+            const d = Math.hypot(x - enemy.x, y - enemy.y);
+            if (d < range) {
+              const angToEnemy = Math.atan2(enemy.y - y, enemy.x - x);
+              let diff = Math.abs(angToEnemy - ang);
+              if (diff > Math.PI) diff = Math.PI * 2 - diff;
+              
+              if (diff < 1.1) {
+                const isCrit = Math.random() < 0.15;
+                const dmg = isCrit ? 24 : 12;
+                enemy.hp -= dmg;
+                enemy.hitFlash = 5;
+                
+                // Knockback
+                const kx = enemy.x - x;
+                const ky = enemy.y - y;
+                const kd = Math.hypot(kx, ky) || 1;
+                enemy.vx = (kx / kd) * 9;
+                enemy.vy = (ky / kd) * 9;
+                
+                addEffect(enemy.x, enemy.y, isCrit ? 'CRÍTICO!' : `-${dmg}`, isCrit ? '#ffff00' : '#ffffff');
+                addParticles(enemy.x, enemy.y, '#ff0000', 8);
+              }
+            }
+          }
+        }
       });
 
       socket.on('game-state-synced', (gameState) => {
-        if (!isHost) {
+        if (!state.isHost) {
           // Sync enemies, constructions, drops from host
           state.enemies = gameState.enemies;
           state.drops = gameState.drops;
@@ -91,15 +124,13 @@ export default function App() {
 
       socket.on('became-host', () => {
         setIsHost(true);
+        state.isHost = true;
         console.log('You are now the host');
       });
 
       socket.on('player-left', (id) => {
-        setRemotePlayers(prev => {
-          const next = { ...prev };
-          delete next[id];
-          return next;
-        });
+        delete state.remotePlayers[id];
+        setRemotePlayers({ ...state.remotePlayers });
       });
     }
 
@@ -241,6 +272,11 @@ export default function App() {
       towerSlots: any[];
       helperSlots: any[];
       gameOver?: boolean;
+      // Multiplayer
+      isJoined: boolean;
+      isHost: boolean;
+      roomId: string;
+      remotePlayers: Record<string, any>;
     }
 
     function initialState(): GameState {
@@ -333,6 +369,10 @@ export default function App() {
           { x: WIDTH / 2 - 120, y: HEIGHT / 2 - 40, used: false },
           { x: WIDTH / 2 + 120, y: HEIGHT / 2 - 40, used: false },
         ],
+        isJoined: isJoined,
+        isHost: isHost,
+        roomId: roomId,
+        remotePlayers: {},
       };
     }
 
@@ -844,9 +884,9 @@ export default function App() {
       state.player.attackAngle = Math.atan2(ty - state.player.y, tx - state.player.x);
 
       // Multiplayer Emit Attack
-      if (socketRef.current && isJoined) {
+      if (socketRef.current && state.isJoined) {
         socketRef.current.emit('player-attack', {
-          roomId,
+          roomId: state.roomId,
           x: state.player.x,
           y: state.player.y,
           ang: state.player.attackAngle
@@ -854,6 +894,8 @@ export default function App() {
       }
       
       const range = 65;
+      // If host, apply damage directly. If not, the host will handle it via 'remote-attack' event.
+      // Actually, to make it feel responsive, we can apply it locally too, but the host is the source of truth.
       for (const enemy of state.enemies) {
         const d = Math.hypot(state.player.x - enemy.x, state.player.y - enemy.y);
         if (d < range) {
@@ -864,6 +906,8 @@ export default function App() {
           if (diff < 1.1) { // ~60 degree cone
             const isCrit = Math.random() < 0.15;
             const dmg = isCrit ? 24 : 12;
+            
+            // Only apply actual damage if host or if we want local prediction
             enemy.hp -= dmg;
             enemy.hitFlash = 5;
             
@@ -878,7 +922,7 @@ export default function App() {
             addEffect(enemy.x, enemy.y, isCrit ? 'CRÍTICO!' : `-${dmg}`, isCrit ? '#ffff00' : '#ffffff');
             addParticles(enemy.x, enemy.y, '#ff0000', 8);
             
-            if (enemy.hp <= 0) {
+            if (enemy.hp <= 0 && state.isHost) {
               const isChest = Math.random() < 0.10;
               if (isChest) {
                 state.player.gold += 5;
@@ -1506,9 +1550,9 @@ export default function App() {
       state.cameraShake *= 0.88;
 
       // Multiplayer Sync
-      if (socketRef.current && isJoined) {
+      if (socketRef.current && state.isJoined) {
         socketRef.current.emit('player-update', {
-          roomId,
+          roomId: state.roomId,
           x: state.player.x,
           y: state.player.y,
           health: state.player.health,
@@ -1517,9 +1561,9 @@ export default function App() {
           frame: state.player.frame
         });
 
-        if (isHost) {
+        if (state.isHost) {
           socketRef.current.emit('sync-game-state', {
-            roomId,
+            roomId: state.roomId,
             enemies: state.enemies,
             drops: state.drops,
             constructions: state.constructions,
@@ -1530,11 +1574,16 @@ export default function App() {
       }
 
       autoCollectResources();
-      spawnEnemy();
-      updateEnemies();
+      
+      // Only host handles spawning and world updates
+      if (state.isHost) {
+        spawnEnemy();
+        updateEnemies();
+        updateDrops();
+        updateDefenders();
+      }
+      
       updateSummons();
-      updateDrops();
-      updateDefenders();
 
       if (state.player.health <= 0) {
         state.status = 'gameover';
@@ -2712,7 +2761,7 @@ export default function App() {
       objects.forEach(obj => obj.draw());
 
       // Draw Remote Players
-      Object.entries(remotePlayers).forEach(([id, p]: [string, any]) => {
+      Object.entries(state.remotePlayers).forEach(([id, p]: [string, any]) => {
         drawOtherPlayer({ ...p, id });
       });
 
@@ -2736,6 +2785,10 @@ export default function App() {
 
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', updateUI);
