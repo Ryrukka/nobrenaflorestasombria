@@ -49,6 +49,7 @@ export default function App() {
     });
 
     socket.on('rooms-list', (list) => {
+      console.log('Received rooms list:', list);
       setRoomsList(list);
     });
 
@@ -2983,11 +2984,20 @@ export default function App() {
             </div>
             
             <div className="space-y-4">
-              {roomsList.length > 0 && (
-                <div className="space-y-2">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
                   <p className="text-xs font-semibold text-blue-400 uppercase tracking-wider text-left">Salas Ativas</p>
-                  <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
-                    {roomsList.map((room) => (
+                  <button 
+                    onClick={() => socketRef.current?.emit('request-rooms')}
+                    className="p-1 hover:bg-white/10 rounded-full transition-colors group"
+                    title="Atualizar Lista"
+                  >
+                    <Globe className="w-3 h-3 text-blue-400/50 group-hover:text-blue-400 group-hover:rotate-180 transition-all duration-500" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                  {roomsList.length > 0 ? (
+                    roomsList.map((room) => (
                       <button
                         key={room.id}
                         onClick={() => {
@@ -3006,10 +3016,14 @@ export default function App() {
                           <span>{room.playerCount} jogando</span>
                         </div>
                       </button>
-                    ))}
-                  </div>
+                    ))
+                  ) : (
+                    <div className="p-4 bg-white/5 border border-white/10 rounded-xl text-center">
+                      <p className="text-blue-300/40 text-sm italic">Nenhuma sala ativa no momento</p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
               <div className="flex gap-2">
                 <div className="relative flex-1">

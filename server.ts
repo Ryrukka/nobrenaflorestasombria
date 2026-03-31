@@ -46,14 +46,54 @@ async function startServer() {
     io.emit("rooms-list", roomList);
   }
 
+  function leaveAllRooms(socketId: string) {
+    let changed = false;
+    for (const roomId in rooms) {
+      const room = rooms[roomId];
+      const index = room.players.indexOf(socketId);
+      if (index !== -1) {
+        room.players.splice(index, 1);
+        io.to(roomId).emit("player-left", socketId);
+        
+        // If host left, assign a new host
+        if (room.host === socketId && room.players.length > 0) {
+          room.host = room.players[0];
+          io.to(room.host).emit("became-host");
+        }
+
+        if (room.players.length === 0) {
+          delete rooms[roomId];
+        }
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // Periodic broadcast of rooms to everyone in the lobby
+  setInterval(() => {
+    broadcastRooms();
+  }, 5000);
+
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
     
     // Send current rooms to the new user
     broadcastRooms();
 
+    socket.on("request-rooms", () => {
+      broadcastRooms();
+    });
+
     socket.on("join-room", (roomId) => {
       console.log(`User ${socket.id} requesting to join room ${roomId}`);
+      
+      // Leave previous rooms first
+      if (leaveAllRooms(socket.id)) {
+        // If we left rooms, broadcast the update
+        broadcastRooms();
+      }
+
       socket.join(roomId);
       if (!rooms[roomId]) {
         rooms[roomId] = { host: socket.id, players: [] };
@@ -96,26 +136,8 @@ async function startServer() {
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
-      for (const roomId in rooms) {
-        const room = rooms[roomId];
-        const index = room.players.indexOf(socket.id);
-        if (index !== -1) {
-          room.players.splice(index, 1);
-          socket.to(roomId).emit("player-left", socket.id);
-          
-          // If host left, assign a new host
-          if (room.host === socket.id && room.players.length > 0) {
-            room.host = room.players[0];
-            io.to(room.host).emit("became-host");
-          }
-
-          if (room.players.length === 0) {
-            delete rooms[roomId];
-          }
-          
-          broadcastRooms();
-          break;
-        }
+      if (leaveAllRooms(socket.id)) {
+        broadcastRooms();
       }
     });
   });
