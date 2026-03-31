@@ -12,15 +12,108 @@ export default function App() {
   const [isJoined, setIsJoined] = useState(false);
   const [isHost, setIsHost] = useState(false);
   const [remotePlayers, setRemotePlayers] = useState<Record<string, any>>({});
+  const [roomsList, setRoomsList] = useState<{ id: string; playerCount: number }[]>([]);
+  const stateRef = useRef<any>(null);
 
   useEffect(() => {
-    // Detectar mobile
     const checkMobile = () => {
       setIsMobile(/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 1024);
     };
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  useEffect(() => {
+    const socket = io();
+    socketRef.current = socket;
+
+    socket.on('rooms-list', (list) => {
+      setRoomsList(list);
+    });
+
+    socket.on('room-joined', (data) => {
+      setIsHost(data.isHost);
+      if (stateRef.current) stateRef.current.isHost = data.isHost;
+    });
+
+    socket.on('player-joined', (id) => {
+      if (stateRef.current) {
+        stateRef.current.remotePlayers[id] = { x: 430, y: 320, health: 100, maxHealth: 100 };
+        setRemotePlayers({ ...stateRef.current.remotePlayers });
+      }
+    });
+
+    socket.on('player-moved', (data) => {
+      const { id, ...playerData } = data;
+      if (stateRef.current) {
+        stateRef.current.remotePlayers[id] = { ...stateRef.current.remotePlayers[id], ...playerData };
+        setRemotePlayers({ ...stateRef.current.remotePlayers });
+      }
+    });
+
+    socket.on('remote-attack', (data) => {
+      const { id, x, y, ang } = data;
+      if (stateRef.current) {
+        stateRef.current.particles.push({
+          x: x + Math.cos(ang) * 20,
+          y: y + Math.sin(ang) * 20,
+          vx: 0, vy: 0,
+          life: 0.2,
+          size: 25,
+          color: 'rgba(255, 255, 255, 0.4)',
+          type: 'slash'
+        });
+
+        if (stateRef.current.isHost) {
+          const range = 65;
+          for (const enemy of stateRef.current.enemies) {
+            const d = Math.hypot(x - enemy.x, y - enemy.y);
+            if (d < range) {
+              const angToEnemy = Math.atan2(enemy.y - y, enemy.x - x);
+              let diff = Math.abs(angToEnemy - ang);
+              if (diff > Math.PI) diff = Math.PI * 2 - diff;
+              if (diff < 1.1) {
+                const dmg = Math.random() < 0.15 ? 24 : 12;
+                enemy.hp -= dmg;
+                enemy.hitFlash = 5;
+                const kx = enemy.x - x;
+                const ky = enemy.y - y;
+                const kd = Math.hypot(kx, ky) || 1;
+                enemy.vx = (kx / kd) * 9;
+                enemy.vy = (ky / kd) * 9;
+              }
+            }
+          }
+        }
+      }
+    });
+
+    socket.on('game-state-synced', (gameState) => {
+      if (stateRef.current && !stateRef.current.isHost) {
+        stateRef.current.enemies = gameState.enemies;
+        stateRef.current.drops = gameState.drops;
+        stateRef.current.constructions = gameState.constructions;
+        stateRef.current.timeOfDay = gameState.timeOfDay;
+        stateRef.current.day = gameState.day;
+      }
+    });
+
+    socket.on('became-host', () => {
+      setIsHost(true);
+      if (stateRef.current) stateRef.current.isHost = true;
+    });
+
+    socket.on('player-left', (id) => {
+      if (stateRef.current) {
+        delete stateRef.current.remotePlayers[id];
+        setRemotePlayers({ ...stateRef.current.remotePlayers });
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
   }, []);
 
   useEffect(() => {
@@ -43,95 +136,8 @@ export default function App() {
     const HEIGHT = canvas.height;
 
     // Multiplayer Socket Setup
-    if (isJoined && !socketRef.current) {
-      const socket = io();
-      socketRef.current = socket;
-
-      socket.emit('join-room', roomId);
-
-      socket.on('room-joined', (data) => {
-        setIsHost(data.isHost);
-        state.isHost = data.isHost;
-        console.log('Joined room:', data.roomId, 'Host:', data.isHost);
-      });
-
-      socket.on('player-joined', (id) => {
-        console.log('Player joined:', id);
-        state.remotePlayers[id] = { x: WIDTH / 2, y: HEIGHT / 2, health: 100, maxHealth: 100 };
-        setRemotePlayers({ ...state.remotePlayers });
-      });
-
-      socket.on('player-moved', (data) => {
-        const { id, ...playerData } = data;
-        state.remotePlayers[id] = { ...state.remotePlayers[id], ...playerData };
-        setRemotePlayers({ ...state.remotePlayers });
-      });
-
-      socket.on('remote-attack', (data) => {
-        const { id, x, y, ang } = data;
-        // Visual effect for remote attack
-        state.particles.push({
-          x: x + Math.cos(ang) * 20,
-          y: y + Math.sin(ang) * 20,
-          vx: 0, vy: 0,
-          life: 0.2,
-          size: 25,
-          color: 'rgba(255, 255, 255, 0.4)',
-          type: 'slash'
-        });
-
-        // If we are host, apply damage from remote player's attack
-        if (state.isHost) {
-          const range = 65;
-          for (const enemy of state.enemies) {
-            const d = Math.hypot(x - enemy.x, y - enemy.y);
-            if (d < range) {
-              const angToEnemy = Math.atan2(enemy.y - y, enemy.x - x);
-              let diff = Math.abs(angToEnemy - ang);
-              if (diff > Math.PI) diff = Math.PI * 2 - diff;
-              
-              if (diff < 1.1) {
-                const isCrit = Math.random() < 0.15;
-                const dmg = isCrit ? 24 : 12;
-                enemy.hp -= dmg;
-                enemy.hitFlash = 5;
-                
-                // Knockback
-                const kx = enemy.x - x;
-                const ky = enemy.y - y;
-                const kd = Math.hypot(kx, ky) || 1;
-                enemy.vx = (kx / kd) * 9;
-                enemy.vy = (ky / kd) * 9;
-                
-                addEffect(enemy.x, enemy.y, isCrit ? 'CRÍTICO!' : `-${dmg}`, isCrit ? '#ffff00' : '#ffffff');
-                addParticles(enemy.x, enemy.y, '#ff0000', 8);
-              }
-            }
-          }
-        }
-      });
-
-      socket.on('game-state-synced', (gameState) => {
-        if (!state.isHost) {
-          // Sync enemies, constructions, drops from host
-          state.enemies = gameState.enemies;
-          state.drops = gameState.drops;
-          state.constructions = gameState.constructions;
-          state.timeOfDay = gameState.timeOfDay;
-          state.day = gameState.day;
-        }
-      });
-
-      socket.on('became-host', () => {
-        setIsHost(true);
-        state.isHost = true;
-        console.log('You are now the host');
-      });
-
-      socket.on('player-left', (id) => {
-        delete state.remotePlayers[id];
-        setRemotePlayers({ ...state.remotePlayers });
-      });
+    if (isJoined && socketRef.current) {
+      socketRef.current.emit('join-room', roomId);
     }
 
     const ui = {
@@ -377,6 +383,7 @@ export default function App() {
     }
 
     let state: GameState = initialState();
+    stateRef.current = state;
 
     const weatherParticles = Array.from({ length: 55 }, () => ({
       x: rand(0, WIDTH), y: rand(0, HEIGHT), size: rand(1, 3), speedY: rand(0.16, 0.5), drift: rand(-0.12, 0.12)
@@ -2785,10 +2792,6 @@ export default function App() {
 
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', updateUI);
@@ -2913,14 +2916,56 @@ export default function App() {
             <p className="text-blue-200/70 text-sm">Crie ou entre em uma sala para jogar com amigos.</p>
             
             <div className="space-y-4">
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="ID da Sala (ex: 1234)"
-                  value={roomId}
-                  onChange={(e) => setRoomId(e.target.value)}
-                  className="w-full bg-black/40 border-2 border-blue-900/50 rounded-xl px-4 py-3 text-white placeholder:text-blue-900/50 focus:border-blue-500/50 outline-none transition-all"
-                />
+              {roomsList.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-blue-400 uppercase tracking-wider text-left">Salas Ativas</p>
+                  <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                    {roomsList.map((room) => (
+                      <button
+                        key={room.id}
+                        onClick={() => {
+                          setRoomId(room.id);
+                          setIsJoined(true);
+                          setGameStarted(true);
+                        }}
+                        className="flex items-center justify-between p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl hover:bg-blue-500/20 transition-all group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                          <span className="text-white font-medium">Sala {room.id}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-blue-300/60 text-xs">
+                          <Users className="w-3 h-3" />
+                          <span>{room.playerCount} jogando</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    placeholder="ID da Sala (ex: 1234)"
+                    value={roomId}
+                    onChange={(e) => setRoomId(e.target.value)}
+                    className="w-full bg-black/40 border-2 border-blue-900/50 rounded-xl px-4 py-3 text-white placeholder:text-blue-900/50 focus:border-blue-500/50 outline-none transition-all"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    const randomId = Math.floor(Math.random() * 1000).toString();
+                    setRoomId(randomId);
+                    setIsJoined(true);
+                    setGameStarted(true);
+                  }}
+                  className="px-4 py-3 bg-black/40 border-2 border-blue-900/50 rounded-xl text-white hover:border-blue-500/50 transition-all flex items-center gap-2"
+                  title="Criar Sala Aleatória"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
               </div>
               
               <button
