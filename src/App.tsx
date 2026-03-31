@@ -726,9 +726,31 @@ export default function App() {
         target.ref.range += 10;
         addEffect(target.ref.x, target.ref.y - 24, '+5 Dano!', '#ffd700');
       } else if (target.type === 'helper') {
-        target.ref.damage += 4;
-        target.ref.range += 10;
-        addEffect(target.ref.x, target.ref.y - 20, 'Soldado Melhorado!', '#ffd700');
+        const h = target.ref;
+        h.damage += 4;
+        h.range += 10;
+        h.maxHp += 40;
+        h.hp = h.maxHp;
+        
+        let abilityMsg = 'Soldado Melhorado!';
+        if (h.level === 2) {
+          abilityMsg = 'Nível 2: +Vida & +Dano';
+        } else if (h.level === 3) {
+          if (h.type === 'warrior') abilityMsg = 'Nível 3: Corte Dourado!';
+          if (h.type === 'archer') abilityMsg = 'Nível 3: Flecha Dupla!';
+          if (h.type === 'sniper') abilityMsg = 'Nível 3: Mira Telescópica!';
+          if (h.type === 'mage') abilityMsg = 'Nível 3: Explosão Arcana!';
+          if (h.type === 'summoner') abilityMsg = 'Nível 3: Invocação Dupla!';
+        } else if (h.level >= 4) {
+          if (h.type === 'warrior') abilityMsg = 'Nível 4: Fúria de Combate!';
+          if (h.type === 'archer') abilityMsg = 'Nível 4: Precisão Letal!';
+          if (h.type === 'sniper') abilityMsg = 'Nível 4: Tiro Penetrante!';
+          if (h.type === 'mage') abilityMsg = 'Nível 4: Congelamento!';
+          if (h.type === 'summoner') abilityMsg = 'Nível 4: Guardiões de Elite!';
+        }
+        
+        addEffect(h.x, h.y - 30, abilityMsg, '#ffd700');
+        showMessage(`${h.type.toUpperCase()}: ${abilityMsg}`);
       } else if (target.type === 'fence') {
         addEffect((target.ref.x1 + target.ref.x2) / 2, (target.ref.y1 + target.ref.y2) / 2 - 12, 'Cerca Reforçada!', '#ffd700');
       }
@@ -1141,7 +1163,10 @@ export default function App() {
         const enemy = state.enemies[i];
         if (enemy.hitFlash > 0) enemy.hitFlash--;
         enemy.cooldown = Math.max(0, enemy.cooldown - 1);
+        enemy.slowTimer = Math.max(0, (enemy.slowTimer || 0) - 1);
         
+        const currentSpeed = enemy.slowTimer > 0 ? enemy.speed * 0.4 : enemy.speed;
+
         // Apply knockback/velocity
         enemy.x += enemy.vx;
         enemy.y += enemy.vy;
@@ -1228,11 +1253,11 @@ export default function App() {
           if (enemy.type === 'archer') {
             const distToPlayer = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
             if (distToPlayer > 180) {
-              enemy.x += (dx / d) * enemy.speed;
-              enemy.y += (dy / d) * enemy.speed;
+              enemy.x += (dx / d) * currentSpeed;
+              enemy.y += (dy / d) * currentSpeed;
             } else if (distToPlayer < 120) {
-              enemy.x -= (dx / d) * enemy.speed;
-              enemy.y -= (dy / d) * enemy.speed;
+              enemy.x -= (dx / d) * currentSpeed;
+              enemy.y -= (dy / d) * currentSpeed;
             }
 
             if (enemy.cooldown <= 0 && distToPlayer < 250) {
@@ -1249,8 +1274,8 @@ export default function App() {
               });
             }
           } else if (enemy.type === 'shaman') {
-            enemy.x += (dx / d) * enemy.speed;
-            enemy.y += (dy / d) * enemy.speed;
+            enemy.x += (dx / d) * currentSpeed;
+            enemy.y += (dy / d) * currentSpeed;
 
             const distToPlayer = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
             if (distToPlayer < 80 && enemy.cooldown <= 0) {
@@ -1261,8 +1286,8 @@ export default function App() {
             }
           } else {
             if (d > 14) {
-              enemy.x += (dx / d) * enemy.speed;
-              enemy.y += (dy / d) * enemy.speed;
+              enemy.x += (dx / d) * currentSpeed;
+              enemy.y += (dy / d) * currentSpeed;
             } else if (enemy.cooldown <= 0) {
               enemy.cooldown = 48;
               if (target.type === 'segment' && target.ref) {
@@ -1452,7 +1477,8 @@ export default function App() {
               target.hitFlash = 5;
               target.vx += Math.cos(ang) * 4;
               target.vy += Math.sin(ang) * 4;
-              h.cooldown = 32;
+              // Level 4 Fury: faster attack
+              h.cooldown = h.level >= 4 ? 24 : 32;
               addEffect(target.x, target.y, `-${h.damage}`, '#ff5252');
               // Slash effect for Warrior
               state.particles.push({
@@ -1461,7 +1487,7 @@ export default function App() {
                 vx: 0, vy: 0,
                 life: 0.2,
                 size: 20,
-                color: 'rgba(255, 255, 255, 0.6)',
+                color: h.level >= 3 ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255, 255, 255, 0.6)',
                 type: 'slash'
               });
               if (target.hp <= 0) { state.player.gold += 1; }
@@ -1491,20 +1517,26 @@ export default function App() {
                 vy: (target.y - h.y) * 0.05,
                 life: 0.5,
                 size: 15,
-                color: '#ba68c8',
+                color: h.level >= 3 ? '#e1bee7' : '#ba68c8',
                 type: 'cloud'
               });
               // AOE Damage
+              const aoeRange = h.level >= 3 ? 90 : 65;
               for (const e of state.enemies) {
                 const ed = Math.hypot(target.x - e.x, target.y - e.y);
-                if (ed < 65) {
+                if (ed < aoeRange) {
                   e.hp -= h.damage * 1.5;
                   e.hitFlash = 5;
+                  // Level 4 Freeze
+                  if (h.level >= 4) {
+                    e.slowTimer = (e.slowTimer || 0) + 120;
+                    addEffect(e.x, e.y - 10, 'CONGELADO!', '#4fc3f7');
+                  }
                   addEffect(e.x, e.y, `-${Math.round(h.damage * 1.5)}`, '#ba68c8');
                   if (e.hp <= 0) { state.player.gold += 1; }
                 }
               }
-              addPulse(target.x, target.y, '#e1bee7');
+              addPulse(target.x, target.y, h.level >= 3 ? '#ba68c8' : '#e1bee7');
               triggerShake(2);
             }
           }
@@ -1513,28 +1545,47 @@ export default function App() {
           if (h.cooldown === 0) {
             h.cooldown = 240;
             addPulse(h.x, h.y, '#4db6ac');
-            // Summon a stronger Golem
-            state.summons.push({
-              x: h.x, y: h.y,
-              vx: 0, vy: 0,
-              hp: 100,
-              maxHp: 100,
-              damage: 12,
-              speed: 1.2,
-              life: 1200, // 20 seconds
-              cooldown: 0,
-              type: 'golem'
-            });
-            showQuestMessage('¡Golem Invocado!', 2000);
+            
+            const summonCount = h.level >= 3 ? 2 : 1;
+            for (let sIdx = 0; sIdx < summonCount; sIdx++) {
+              state.summons.push({
+                x: h.x + (sIdx * 10 - 5), y: h.y + (sIdx * 10 - 5),
+                vx: 0, vy: 0,
+                hp: h.level >= 4 ? 150 : 100,
+                maxHp: h.level >= 4 ? 150 : 100,
+                damage: h.level >= 4 ? 18 : 12,
+                speed: 1.2,
+                life: 1200, // 20 seconds
+                cooldown: 0,
+                type: 'golem'
+              });
+            }
+            showQuestMessage(summonCount > 1 ? '¡Golems Invocados!' : '¡Golem Invocado!', 2000);
           }
         } else {
           // Archer / Sniper
           if (target && h.cooldown === 0) {
-            target.hp -= h.damage;
+            const isSniper = h.type === 'sniper';
+            let finalDamage = h.damage;
+            
+            // Level 4 Sniper: Double damage
+            if (isSniper && h.level >= 4) finalDamage *= 2;
+            
+            // Level 4 Archer: Crit chance
+            const isCrit = !isSniper && h.level >= 4 && Math.random() < 0.15;
+            if (isCrit) finalDamage *= 2;
+
+            target.hp -= finalDamage;
             target.hitFlash = 5;
-            h.cooldown = h.type === 'sniper' ? 110 : 28;
-            addEffect(target.x, target.y, `-${h.damage}`, '#ff5252');
-            addPulse(target.x, target.y, h.type === 'sniper' ? '#ff4444' : '#f1d28c');
+            h.cooldown = isSniper ? 110 : 28;
+            
+            // Level 3 Archer: Double shot
+            if (!isSniper && h.level >= 3 && Math.random() < 0.2) {
+              h.cooldown = 5; // Rapid fire next shot
+            }
+
+            addEffect(target.x, target.y, `-${Math.round(finalDamage)}`, isCrit ? '#ffd700' : '#ff5252');
+            addPulse(target.x, target.y, isSniper ? '#ff4444' : '#f1d28c');
             if (target.hp <= 0) { state.player.gold += 1; }
           }
         }
@@ -2106,6 +2157,7 @@ export default function App() {
       const selected = selectedConstruction && selectedConstruction.ref === h;
       const walkFrame = Math.floor((h.walkTimer || 0) / 8) % 2;
       const bob = walkFrame === 1 ? 2 : 0;
+      const level = h.level || 1;
       
       // Shadow
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -2113,7 +2165,7 @@ export default function App() {
       ctx.ellipse(h.x, h.y + 14, 10, 4, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Body color based on type
+      // Body color based on type and level
       let bodyColor = '#4f6440'; // Archer (Green)
       let hatColor = '#2e2116';
       let toolColor = '#d1d1d1';
@@ -2121,29 +2173,46 @@ export default function App() {
       let capeColor = '#556b2f';
       
       if (h.type === 'warrior') {
-        bodyColor = '#0047AB'; // Blue Tunic like Hero
-        hatColor = '#78909c'; // Steel Helmet
-        toolColor = '#a0a0a0'; // Sword
+        bodyColor = level >= 3 ? '#1A237E' : '#0047AB'; // Darker blue for high level
+        hatColor = level >= 3 ? '#FFD700' : '#78909c'; // Gold helmet for high level
+        toolColor = level >= 4 ? '#FFD700' : '#a0a0a0'; // Gold sword
         secondaryColor = '#3e2723';
-        capeColor = '#b22222'; // Red Cape
+        capeColor = level >= 2 ? '#8B0000' : '#b22222'; // Darker red cape
       } else if (h.type === 'sniper') {
-        bodyColor = '#404a64'; // Bluish
-        hatColor = '#2b2e3d';
-        toolColor = '#555555'; // Long rifle
+        bodyColor = level >= 3 ? '#1A1C2B' : '#404a64';
+        hatColor = level >= 3 ? '#FFD700' : '#2b2e3d';
+        toolColor = level >= 4 ? '#FFD700' : '#555555';
         secondaryColor = '#1a1c2b';
         capeColor = '#2b2e3d';
       } else if (h.type === 'mage') {
-        bodyColor = '#5c4064'; // Purple
-        hatColor = '#362b3d';
-        toolColor = '#ba68c8'; // Staff
+        bodyColor = level >= 3 ? '#4A148C' : '#5c4064';
+        hatColor = level >= 3 ? '#FFD700' : '#362b3d';
+        toolColor = level >= 4 ? '#FFD700' : '#ba68c8';
         secondaryColor = '#2b1a36';
-        capeColor = '#4b0082';
+        capeColor = level >= 2 ? '#311B92' : '#4b0082';
       } else if (h.type === 'summoner') {
-        bodyColor = '#40645e'; // Teal
-        hatColor = '#2b3d3a';
-        toolColor = '#4db6ac'; // Staff
+        bodyColor = level >= 3 ? '#004D40' : '#40645e';
+        hatColor = level >= 3 ? '#FFD700' : '#2b3d3a';
+        toolColor = level >= 4 ? '#FFD700' : '#4db6ac';
         secondaryColor = '#1a2b28';
-        capeColor = '#008080';
+        capeColor = level >= 2 ? '#006064' : '#008080';
+      } else {
+        // Archer
+        bodyColor = level >= 3 ? '#1B5E20' : '#4f6440';
+        hatColor = level >= 3 ? '#FFD700' : '#2e2116';
+        toolColor = level >= 4 ? '#FFD700' : '#d1d1d1';
+        capeColor = level >= 2 ? '#2E7D32' : '#556b2f';
+      }
+
+      // Level Aura (Level 4+)
+      if (level >= 4) {
+        ctx.save();
+        ctx.globalAlpha = 0.3 + Math.sin(Date.now() / 200) * 0.1;
+        ctx.fillStyle = h.type === 'mage' ? '#ba68c8' : h.type === 'warrior' ? '#ff5252' : '#ffd700';
+        ctx.beginPath();
+        ctx.arc(h.x, h.y + 5, 18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
 
       // Cape (Behind)
@@ -2168,7 +2237,7 @@ export default function App() {
       ctx.fillRect(h.x - 6, h.y - 14 + bob, 12, 12);
       
       // Eyes
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = level >= 3 ? '#FFD700' : '#000'; // Glowing eyes for level 3+
       const eyeY = h.y - 8 + bob;
       if (h.facing === 'left') {
         ctx.fillRect(h.x - 4, eyeY, 2, 3);
@@ -2184,7 +2253,7 @@ export default function App() {
         ctx.arc(h.x, h.y - 14 + bob, 8, Math.PI, 0);
         ctx.fill();
         // Horns
-        ctx.fillStyle = '#ffd700';
+        ctx.fillStyle = level >= 2 ? '#FFD700' : '#fff';
         ctx.beginPath();
         ctx.moveTo(h.x - 6, h.y - 18 + bob);
         ctx.lineTo(h.x - 10, h.y - 24 + bob);
@@ -2211,17 +2280,17 @@ export default function App() {
         ctx.fillRect(h.x - 5, h.y - 20 + bob, 10, 4);
       }
 
-      // Shield for Warrior
+      // Shield for Warrior (Level 3+ gets a bigger one)
       if (h.type === 'warrior') {
         ctx.save();
         ctx.translate(h.x + (h.facing === 'left' ? 10 : -10), h.y + 6 + bob);
-        ctx.fillStyle = '#ffd700';
+        ctx.fillStyle = level >= 3 ? '#FFD700' : '#78909c';
         ctx.beginPath();
-        ctx.arc(0, 0, 7, 0, Math.PI * 2);
+        ctx.arc(0, 0, level >= 3 ? 9 : 7, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = bodyColor;
         ctx.beginPath();
-        ctx.arc(0, 0, 5, 0, Math.PI * 2);
+        ctx.arc(0, 0, level >= 3 ? 6 : 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
@@ -2566,6 +2635,22 @@ export default function App() {
         ctx.arc(e.x, e.y, 18 * s, 0, Math.PI * 2);
         ctx.fill();
         return;
+      }
+
+      if (e.slowTimer > 0) {
+        ctx.strokeStyle = '#4fc3f7';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, 20 * s, 0, Math.PI * 2);
+        ctx.stroke();
+        // Ice crystals
+        ctx.fillStyle = '#e1f5fe';
+        for (let i = 0; i < 3; i++) {
+          const ang = (performance.now() * 0.002 + i * 2) % (Math.PI * 2);
+          ctx.beginPath();
+          ctx.arc(e.x + Math.cos(ang) * 18 * s, e.y + Math.sin(ang) * 18 * s, 3 * s, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       if (e.type === 'fast') {
