@@ -1,11 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Heart, Coins, Trees, Gem, Hammer, Shield, Users, X, ArrowUpCircle, Wrench, Play, Plus, LogIn } from 'lucide-react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { Heart, Coins, Trees, Gem, Hammer, Shield, Users, X, ArrowUpCircle, Wrench, Play, Plus, LogIn, Globe } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(null);
+  const socketRef = useRef<Socket | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
+  const [roomId, setRoomId] = useState('');
+  const [isJoined, setIsJoined] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+  const [remotePlayers, setRemotePlayers] = useState<Record<string, any>>({});
 
   useEffect(() => {
     // Detectar mobile
@@ -23,8 +29,79 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Adjust canvas dimensions for mobile
+    const isMobileNow = window.innerWidth < 1024;
+    if (isMobileNow) {
+      canvas.width = 640;
+      canvas.height = 960; // More vertical for mobile
+    } else {
+      canvas.width = 860;
+      canvas.height = 640;
+    }
+
     const WIDTH = canvas.width;
     const HEIGHT = canvas.height;
+
+    // Multiplayer Socket Setup
+    if (isJoined && !socketRef.current) {
+      const socket = io();
+      socketRef.current = socket;
+
+      socket.emit('join-room', roomId);
+
+      socket.on('room-joined', (data) => {
+        setIsHost(data.isHost);
+        console.log('Joined room:', data.roomId, 'Host:', data.isHost);
+      });
+
+      socket.on('player-joined', (id) => {
+        console.log('Player joined:', id);
+        setRemotePlayers(prev => ({ ...prev, [id]: { x: WIDTH / 2, y: HEIGHT / 2, health: 100, maxHealth: 100 } }));
+      });
+
+      socket.on('player-moved', (data) => {
+        const { id, ...playerData } = data;
+        setRemotePlayers(prev => ({ ...prev, [id]: { ...prev[id], ...playerData } }));
+      });
+
+      socket.on('remote-attack', (data) => {
+        const { id, x, y, ang } = data;
+        // Visual effect for remote attack
+        state.particles.push({
+          x: x + Math.cos(ang) * 20,
+          y: y + Math.sin(ang) * 20,
+          vx: 0, vy: 0,
+          life: 0.2,
+          size: 25,
+          color: 'rgba(255, 255, 255, 0.4)',
+          type: 'slash'
+        });
+      });
+
+      socket.on('game-state-synced', (gameState) => {
+        if (!isHost) {
+          // Sync enemies, constructions, drops from host
+          state.enemies = gameState.enemies;
+          state.drops = gameState.drops;
+          state.constructions = gameState.constructions;
+          state.timeOfDay = gameState.timeOfDay;
+          state.day = gameState.day;
+        }
+      });
+
+      socket.on('became-host', () => {
+        setIsHost(true);
+        console.log('You are now the host');
+      });
+
+      socket.on('player-left', (id) => {
+        setRemotePlayers(prev => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      });
+    }
 
     const ui = {
       healthText: document.getElementById('healthText'),
@@ -70,7 +147,7 @@ export default function App() {
     function distance(a: {x:number, y:number}, b: {x:number, y:number}) { return Math.hypot(a.x - b.x, a.y - b.y); }
     function canPay(inv: any, cost: any) { return Object.entries(cost).every(([k, v]) => inv[k] >= (v as number)); }
     function pay(inv: any, cost: any) { Object.entries(cost).forEach(([k, v]) => inv[k] -= (v as number)); }
-    function isMobileLayout() { return forceMobile || window.innerWidth <= 760; }
+    function isMobileLayout() { return forceMobile || window.innerWidth < 1024; }
 
     function showQuestMessage(text: string, duration = 2000) {
       if (!ui.questMessage) return;
@@ -200,6 +277,7 @@ export default function App() {
           y: HEIGHT / 2 + 66,
           speed: 2.6,
           health: 100,
+          maxHealth: 100,
           facing: 'down',
           frame: 0,
           walkTimer: 0,
@@ -286,8 +364,8 @@ export default function App() {
     }
 
     function updateUI() {
-      if (ui.healthText) ui.healthText.textContent = Math.round(state.player.health) + '%';
-      if (ui.healthFill) ui.healthFill.style.width = state.player.health + '%';
+      if (ui.healthText) ui.healthText.textContent = `${Math.round(state.player.health)} / ${state.player.maxHealth}`;
+      if (ui.healthFill) ui.healthFill.style.width = (state.player.health / state.player.maxHealth * 100) + '%';
       if (ui.woodCount) ui.woodCount.textContent = String(state.player.wood);
       if (ui.stoneCount) ui.stoneCount.textContent = String(state.player.stone);
       if (ui.fiberCount) ui.fiberCount.textContent = String(state.player.fiber);
@@ -764,6 +842,16 @@ export default function App() {
       state.player.idleAttackTimer = 25; // Cooldown
       state.player.attackTimer = 10; // Animation duration
       state.player.attackAngle = Math.atan2(ty - state.player.y, tx - state.player.x);
+
+      // Multiplayer Emit Attack
+      if (socketRef.current && isJoined) {
+        socketRef.current.emit('player-attack', {
+          roomId,
+          x: state.player.x,
+          y: state.player.y,
+          ang: state.player.attackAngle
+        });
+      }
       
       const range = 65;
       for (const enemy of state.enemies) {
@@ -1057,14 +1145,16 @@ export default function App() {
         if (e.hp <= 0 && !e.dying) {
           e.dying = 30; // 30 frames of death animation
           
-          // Loot drop (15% chance)
-          if (Math.random() < 0.15) {
+          // Loot drop (18% chance)
+          if (Math.random() < 0.18) {
             const r = Math.random();
             let lootType = 'herb';
             let lootName = 'Erva Medicinal';
-            if (r < 0.1) { lootType = 'sword'; lootName = 'Espada de Bronze'; }
-            else if (r < 0.25) { lootType = 'ring'; lootName = 'Anel de Velocidade'; }
+            if (r < 0.05) { lootType = 'chalice'; lootName = 'Cálice de Vida'; }
+            else if (r < 0.15) { lootType = 'sword'; lootName = 'Espada de Bronze'; }
+            else if (r < 0.30) { lootType = 'ring'; lootName = 'Anel de Velocidade'; }
             else if (r < 0.45) { lootType = 'boot'; lootName = 'Bota de Mercúrio'; }
+            else if (r < 0.65) { lootType = 'gem'; lootName = 'Gema de Liderança'; }
             
             state.drops.push({
               x: e.x, y: e.y,
@@ -1106,10 +1196,38 @@ export default function App() {
           addEffect(d.x, d.y - 15, d.name, '#ffd700'); // Golden text
           showQuestMessage(`¡Obteve ${d.name}!`);
           
-          if (d.type === 'sword') state.player.damage += 3;
-          if (d.type === 'ring') state.player.attackCooldown = Math.max(12, state.player.attackCooldown - 6);
-          if (d.type === 'boot') state.player.speed += 0.2;
-          if (d.type === 'herb') state.player.health = Math.min(100, state.player.health + 20);
+          if (d.type === 'sword') {
+            state.player.damage += 5;
+            addEffect(state.player.x, state.player.y - 40, '+5 Dano!', '#ff4d4d');
+          }
+          if (d.type === 'ring') {
+            state.player.attackCooldown = Math.max(10, state.player.attackCooldown - 5);
+            addEffect(state.player.x, state.player.y - 40, 'Ataque Rápido!', '#ffd700');
+          }
+          if (d.type === 'boot') {
+            state.player.speed += 0.3;
+            addEffect(state.player.x, state.player.y - 40, '+0.3 Velocidade!', '#8b4513');
+          }
+          if (d.type === 'herb') {
+            const heal = state.player.maxHealth * 0.3;
+            state.player.health = Math.min(state.player.maxHealth, state.player.health + heal);
+            addEffect(state.player.x, state.player.y - 40, `+${Math.round(heal)} HP`, '#32cd32');
+          }
+          if (d.type === 'chalice') {
+            state.player.maxHealth += 25;
+            state.player.health = state.player.maxHealth;
+            addEffect(state.player.x, state.player.y - 40, '+25 HP Máximo!', '#00bcd4');
+          }
+          if (d.type === 'gem') {
+            state.constructions.helpers.forEach(h => {
+              h.maxHp += 20;
+              h.hp += 20;
+              h.damage += 4;
+              addEffect(h.x, h.y - 20, 'Soldado Buff!', '#9c27b0');
+            });
+            addEffect(state.player.x, state.player.y - 40, 'Exército Fortalecido!', '#9c27b0');
+          }
+          addPulse(state.player.x, state.player.y, '#fff');
         }
       }
       state.drops = state.drops.filter(d => d.life > 0);
@@ -1207,17 +1325,28 @@ export default function App() {
             if (h.cooldown === 0) {
               h.cooldown = 60;
               addPulse(h.x, h.y, '#9c27b0');
+              // Magical Fireball Effect
+              state.particles.push({
+                x: h.x, y: h.y,
+                vx: (target.x - h.x) * 0.05,
+                vy: (target.y - h.y) * 0.05,
+                life: 0.5,
+                size: 15,
+                color: '#ba68c8',
+                type: 'cloud'
+              });
               // AOE Damage
               for (const e of state.enemies) {
                 const ed = Math.hypot(target.x - e.x, target.y - e.y);
-                if (ed < 50) {
-                  e.hp -= h.damage;
+                if (ed < 65) {
+                  e.hp -= h.damage * 1.5;
                   e.hitFlash = 5;
-                  addEffect(e.x, e.y, `-${h.damage}`, '#ba68c8');
+                  addEffect(e.x, e.y, `-${Math.round(h.damage * 1.5)}`, '#ba68c8');
                   if (e.hp <= 0) { state.player.gold += 1; }
                 }
               }
               addPulse(target.x, target.y, '#e1bee7');
+              triggerShake(2);
             }
           }
         } else if (h.type === 'summoner') {
@@ -1225,15 +1354,19 @@ export default function App() {
           if (h.cooldown === 0) {
             h.cooldown = 240;
             addPulse(h.x, h.y, '#4db6ac');
+            // Summon a stronger Golem
             state.summons.push({
               x: h.x, y: h.y,
               vx: 0, vy: 0,
-              hp: 30,
-              damage: 5,
-              speed: 1.8,
-              life: 600, // 10 seconds
-              cooldown: 0
+              hp: 100,
+              maxHp: 100,
+              damage: 12,
+              speed: 1.2,
+              life: 1200, // 20 seconds
+              cooldown: 0,
+              type: 'golem'
             });
+            showQuestMessage('¡Golem Invocado!', 2000);
           }
         } else {
           // Archer / Sniper
@@ -1371,6 +1504,30 @@ export default function App() {
       updatePlayerCombat();
       updateEffects();
       state.cameraShake *= 0.88;
+
+      // Multiplayer Sync
+      if (socketRef.current && isJoined) {
+        socketRef.current.emit('player-update', {
+          roomId,
+          x: state.player.x,
+          y: state.player.y,
+          health: state.player.health,
+          maxHealth: state.player.maxHealth,
+          facing: state.player.facing,
+          frame: state.player.frame
+        });
+
+        if (isHost) {
+          socketRef.current.emit('sync-game-state', {
+            roomId,
+            enemies: state.enemies,
+            drops: state.drops,
+            constructions: state.constructions,
+            timeOfDay: state.timeOfDay,
+            day: state.day
+          });
+        }
+      }
 
       autoCollectResources();
       spawnEnemy();
@@ -2425,8 +2582,12 @@ export default function App() {
       ctx.ellipse(0, 5, 10, 5, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Icon
-      ctx.fillStyle = d.type === 'sword' ? '#c0c0c0' : d.type === 'ring' ? '#ffd700' : d.type === 'boot' ? '#8b4513' : '#32cd32';
+      // Icon colors
+      ctx.fillStyle = d.type === 'sword' ? '#c0c0c0' : 
+                      d.type === 'ring' ? '#ffd700' : 
+                      d.type === 'boot' ? '#8b4513' : 
+                      d.type === 'gem' ? '#9c27b0' : 
+                      d.type === 'chalice' ? '#00bcd4' : '#32cd32';
       ctx.beginPath();
       ctx.arc(0, bob, 8, 0, Math.PI * 2);
       ctx.fill();
@@ -2474,15 +2635,33 @@ export default function App() {
 
     function drawSummon(s: any) {
       const bob = Math.sin(performance.now() * 0.01) * 3;
-      ctx.fillStyle = 'rgba(77, 182, 172, 0.4)';
-      ctx.beginPath();
-      ctx.arc(s.x, s.y + bob, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-      ctx.beginPath();
-      ctx.arc(s.x - 2, s.y - 2 + bob, 1.5, 0, Math.PI * 2);
-      ctx.arc(s.x + 2, s.y - 2 + bob, 1.5, 0, Math.PI * 2);
-      ctx.fill();
+      if (s.type === 'golem') {
+        // Golem Drawing
+        ctx.fillStyle = '#78909c'; // Stone color
+        ctx.fillRect(s.x - 12, s.y - 20 + bob, 24, 24);
+        ctx.fillStyle = '#546e7a'; // Darker stone
+        ctx.fillRect(s.x - 10, s.y - 18 + bob, 20, 20);
+        // Eyes (Glowing Cyan)
+        ctx.fillStyle = '#00bcd4';
+        ctx.fillRect(s.x - 6, s.y - 12 + bob, 3, 3);
+        ctx.fillRect(s.x + 3, s.y - 12 + bob, 3, 3);
+        // Health Bar for Golem
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(s.x - 10, s.y - 28 + bob, 20, 3);
+        ctx.fillStyle = '#4db6ac';
+        ctx.fillRect(s.x - 10, s.y - 28 + bob, 20 * (s.hp / s.maxHp), 3);
+      } else {
+        // Default Spirit
+        ctx.fillStyle = 'rgba(77, 182, 172, 0.4)';
+        ctx.beginPath();
+        ctx.arc(s.x, s.y + bob, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.beginPath();
+        ctx.arc(s.x - 2, s.y - 2 + bob, 1.5, 0, Math.PI * 2);
+        ctx.arc(s.x + 2, s.y - 2 + bob, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     function drawForestEdges() {
@@ -2531,6 +2710,11 @@ export default function App() {
 
       // Draw sorted objects
       objects.forEach(obj => obj.draw());
+
+      // Draw Remote Players
+      Object.entries(remotePlayers).forEach(([id, p]: [string, any]) => {
+        drawOtherPlayer({ ...p, id });
+      });
 
       drawEffects();
       drawWeather();
@@ -2588,34 +2772,38 @@ export default function App() {
       <div className="game-wrap">
         <canvas ref={canvasRef} width={860} height={640} />
 
-        {/* Dragon Quest HUD */}
+        {/* New Responsive HUD */}
         <div className="hud-top">
-          <div className="hud-stats dq-window">
-            <div className="hud-stat-item">
-              <Heart size={16} color="#ff4d4d" fill="#ff4d4d" />
-              <div className="hp-bar-container">
-                <div id="healthFill" className="hp-bar-fill" style={{ width: '100%' }} />
-              </div>
-              <span id="healthText">100%</span>
-            </div>
-            <div className="hud-stat-item">
-              <Coins size={16} color="#ffd700" />
-              <span id="goldCount">0</span>
-            </div>
+          <div className="health-container-top">
+            <div id="healthFill" className="hp-bar-fill" style={{ width: '100%' }} />
           </div>
+          
+          <div className="hud-main-row">
+            <div className="hud-resources">
+              <div className="hud-stat-item">
+                <Heart size={14} color="#ff4d4d" fill="#ff4d4d" className="md:w-4 md:h-4" />
+                <span id="healthText">100%</span>
+              </div>
+              <div className="hud-stat-item">
+                <Coins size={14} color="#ffd700" className="md:w-4 md:h-4" />
+                <span id="goldCount">0</span>
+              </div>
+              <div className="hud-stat-item">
+                <Trees size={14} color="#8c5a39" className="md:w-4 md:h-4" />
+                <span id="woodCount">0</span>
+              </div>
+              <div className="hud-stat-item">
+                <Shield size={14} color="#808074" className="md:w-4 md:h-4" />
+                <span id="stoneCount">0</span>
+              </div>
+              <div className="hud-stat-item">
+                <Gem size={14} color="#79a950" className="md:w-4 md:h-4" />
+                <span id="fiberCount">0</span>
+              </div>
+            </div>
 
-          <div className="hud-stats dq-window">
-            <div className="hud-stat-item">
-              <Trees size={16} color="#8c5a39" />
-              <span id="woodCount">0</span>
-            </div>
-            <div className="hud-stat-item">
-              <Shield size={16} color="#808074" />
-              <span id="stoneCount">0</span>
-            </div>
-            <div className="hud-stat-item">
-              <Gem size={16} color="#79a950" />
-              <span id="fiberCount">0</span>
+            <div className="day-info">
+              <span id="dayBadge">Dia 1 — Dia</span>
             </div>
           </div>
         </div>
@@ -2644,13 +2832,8 @@ export default function App() {
           <div id="joystickBase" className="joystick-area">
             <div id="joystickStick" className="joystick-stick" />
           </div>
-          <div className="action-buttons">
-            <button className="action-btn" onPointerDown={() => (window as any).playerAttack?.()}>ATAQUE</button>
-            <button className="action-btn" onClick={() => (window as any).closeUpgradePanel?.()}>FECHAR</button>
-          </div>
         </div>
 
-        <div id="dayBadge" className="day-badge">Dia 1 — Dia</div>
         <div id="questMessage" className="quest-message">Um Slime se aproxima!</div>
         <div id="messageBox" className="message" />
 
@@ -2664,7 +2847,49 @@ export default function App() {
           </div>
         </div>
 
-        {/* Title Overlay */}
+        {/* Room Selection Overlay */}
+      {!isJoined && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="dq-window w-full max-w-md p-8 text-center space-y-6">
+            <div className="flex justify-center mb-4">
+              <div className="p-4 bg-blue-500/20 rounded-full border-2 border-blue-400/50">
+                <Globe className="w-12 h-12 text-blue-400" />
+              </div>
+            </div>
+            <h1 className="text-3xl font-bold text-white tracking-tight">Multiplayer</h1>
+            <p className="text-blue-200/70 text-sm">Crie ou entre em uma sala para jogar com amigos.</p>
+            
+            <div className="space-y-4">
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="ID da Sala (ex: 1234)"
+                  value={roomId}
+                  onChange={(e) => setRoomId(e.target.value)}
+                  className="w-full bg-black/40 border-2 border-blue-900/50 rounded-xl px-4 py-3 text-white placeholder:text-blue-900/50 focus:border-blue-500/50 outline-none transition-all"
+                />
+              </div>
+              
+              <button
+                onClick={() => {
+                  if (roomId.trim()) {
+                    setIsJoined(true);
+                    setGameStarted(true);
+                  } else {
+                    alert('Por favor, digite um ID de sala.');
+                  }
+                }}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-[0_4px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2 group"
+              >
+                <LogIn className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                ENTRAR NA SALA
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Title Overlay */}
         {!gameStarted && (
           <div id="titleOverlay" className="overlay">
             <div className="card dq-window">

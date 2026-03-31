@@ -49,46 +49,45 @@ canvas {
 /* Dragon Quest Style Windows */
 .dq-window {
   background: var(--dq-blue);
-  border: 3px solid var(--dq-border);
-  box-shadow: inset 0 0 0 2px #000, 0 4px 10px rgba(0,0,0,0.5);
-  padding: 10px;
+  border: 2px solid var(--dq-border);
+  box-shadow: inset 0 0 0 1px #000, 0 2px 5px rgba(0,0,0,0.5);
+  padding: 6px;
   color: white;
+}
+
+@media (min-width: 1024px) {
+  .dq-window {
+    border-width: 3px;
+    box-shadow: inset 0 0 0 2px #000, 0 4px 10px rgba(0,0,0,0.5);
+    padding: 10px;
+  }
 }
 
 /* Responsive HUD */
 .hud-top {
   position: absolute;
-  top: env(safe-area-inset-top, 10px);
-  left: env(safe-area-inset-left, 10px);
-  right: env(safe-area-inset-right, 10px);
-  display: flex;
-  justify-content: space-between;
-  pointer-events: none;
-  z-index: 100;
-}
-
-.hud-stats {
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  min-width: 120px;
+  pointer-events: none;
+  z-index: 100;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) 0 env(safe-area-inset-left, 0);
 }
 
-.hud-stat-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: bold;
-}
-
-.hp-bar-container {
-  flex-grow: 1;
-  height: 10px;
+.health-container-top {
+  width: 100%;
+  height: 6px;
   background: #333;
-  border: 1px solid #fff;
-  border-radius: 5px;
+  position: relative;
   overflow: hidden;
+}
+
+@media (min-width: 1024px) {
+  .health-container-top {
+    height: 10px;
+  }
 }
 
 .hp-bar-fill {
@@ -97,20 +96,77 @@ canvas {
   transition: width 0.3s ease;
 }
 
+.hud-main-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+}
+
+.hud-resources {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.hud-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  text-shadow: 1px 1px 1px #000;
+}
+
+@media (min-width: 1024px) {
+  .hud-stat-item {
+    font-size: 14px;
+    gap: 8px;
+  }
+}
+
+.day-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  background: rgba(21, 101, 192, 0.8);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--dq-border);
+}
+
+@media (min-width: 1024px) {
+  .day-info {
+    font-size: 12px;
+    padding: 4px 12px;
+  }
+}
+
 /* Hotbar / Shop */
 .hotbar {
   position: absolute;
-  bottom: env(safe-area-inset-bottom, 20px);
+  bottom: calc(env(safe-area-inset-bottom, 10px) + 10px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 10px;
+  gap: 6px;
   z-index: 100;
+  pointer-events: auto;
+}
+
+@media (min-width: 1024px) {
+  .hotbar {
+    bottom: 30px;
+    gap: 12px;
+  }
 }
 
 .hotbar-item {
-  width: 60px;
-  height: 60px;
+  width: 44px;
+  height: 44px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -118,6 +174,14 @@ canvas {
   cursor: pointer;
   transition: transform 0.1s;
   position: relative;
+  padding: 4px;
+}
+
+@media (min-width: 1024px) {
+  .hotbar-item {
+    width: 64px;
+    height: 64px;
+  }
 }
 
 .hotbar-item:active {
@@ -125,29 +189,50 @@ canvas {
 }
 
 .hotbar-item .icon {
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
+}
+
+@media (min-width: 1024px) {
+  .hotbar-item .icon {
+    width: 28px;
+    height: 28px;
+  }
 }
 
 .hotbar-item .label {
-  font-size: 10px;
-  margin-top: 4px;
+  font-size: 8px;
+  margin-top: 2px;
+  display: none; /* Hide labels on mobile to save space */
+}
+
+@media (min-width: 1024px) {
+  .hotbar-item .label {
+    display: block;
+    font-size: 10px;
+  }
 }
 
 .key-hint {
   position: absolute;
-  top: -5px;
-  left: -5px;
+  top: -4px;
+  left: -4px;
   background: #fff;
   color: #000;
-  width: 16px;
-  height: 16px;
-  font-size: 10px;
-  display: flex;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  display: none; /* Hide key hints on mobile */
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   font-weight: bold;
+}
+
+@media (min-width: 1024px) {
+  .key-hint {
+    display: flex;
+  }
 }
 
 /* Mobile Controls */
@@ -162,8 +247,8 @@ canvas {
   position: absolute;
   width: 100px;
   height: 100px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 50%;
   display: none;
   pointer-events: none;
@@ -175,38 +260,8 @@ canvas {
   left: 25px;
   width: 50px;
   height: 50px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.3);
   border-radius: 50%;
-}
-
-.action-buttons {
-  position: absolute;
-  bottom: env(safe-area-inset-bottom, 20px);
-  right: env(safe-area-inset-right, 20px);
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-  pointer-events: auto;
-}
-
-.action-btn {
-  width: 80px;
-  height: 80px;
-  background: var(--dq-blue);
-  border: 3px solid var(--dq-border);
-  border-radius: 50%;
-  color: white;
-  font-weight: bold;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-}
-
-.action-btn:active {
-  transform: scale(0.9);
-  background: #0d47a1;
 }
 
 /* Overlays */
@@ -284,42 +339,52 @@ canvas {
 
 /* Other UI */
 .day-badge {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0,0,0,0.6);
-  padding: 5px 15px;
-  border-radius: 20px;
-  font-size: 12px;
-  z-index: 100;
+  display: none; /* Integrated into HUD */
 }
 
 .quest-message {
   position: absolute;
-  top: 80px;
+  top: 60px;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(255, 255, 255, 0.9);
   color: #000;
-  padding: 8px 20px;
-  border-radius: 5px;
+  padding: 4px 12px;
+  border-radius: 4px;
   font-weight: bold;
-  font-size: 14px;
+  font-size: 12px;
   display: none;
   z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+@media (min-width: 1024px) {
+  .quest-message {
+    top: 80px;
+    padding: 8px 20px;
+    font-size: 14px;
+  }
 }
 
 .message {
   position: absolute;
-  bottom: 120px;
+  bottom: 110px;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(0,0,0,0.7);
-  padding: 10px 20px;
-  border-radius: 5px;
+  padding: 6px 16px;
+  border-radius: 4px;
   display: none;
   z-index: 100;
+  font-size: 12px;
+}
+
+@media (min-width: 1024px) {
+  .message {
+    bottom: 120px;
+    padding: 10px 20px;
+    font-size: 14px;
+  }
 }
 
 /* Upgrade Panel */
@@ -328,24 +393,30 @@ canvas {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 280px;
+  width: 240px;
   display: none;
   z-index: 500;
+}
+
+@media (min-width: 1024px) {
+  .upgrade-panel {
+    width: 320px;
+  }
 }
 
 .panel-buttons {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 20px;
+  gap: 8px;
+  margin-top: 15px;
   align-items: stretch;
 }
 
 .panel-btn {
   background: rgba(255,255,255,0.1);
-  border: 3px solid #fff;
+  border: 2px solid #fff;
   color: #fff;
-  padding: 12px;
+  padding: 8px;
   cursor: pointer;
   font-family: inherit;
   font-weight: bold;
@@ -354,6 +425,15 @@ canvas {
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  font-size: 12px;
+}
+
+@media (min-width: 1024px) {
+  .panel-btn {
+    border-width: 3px;
+    padding: 12px;
+    font-size: 14px;
+  }
 }
 
 .panel-btn:hover {
@@ -365,23 +445,8 @@ canvas {
 }
 
 /* Responsive adjustments */
-@media (max-width: 768px) {
-  .hud-top {
-    flex-direction: column;
-    gap: 10px;
-  }
-  
+@media (max-width: 1024px) {
   .hotbar {
-    bottom: 100px;
-  }
-  
-  .hotbar-item {
-    width: 50px;
-    height: 50px;
-  }
-  
-  .action-btn {
-    width: 70px;
-    height: 70px;
+    /* Hotbar is now handled by mobile-first styles */
   }
 }
