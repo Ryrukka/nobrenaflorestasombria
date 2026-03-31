@@ -53,9 +53,11 @@ async function startServer() {
     broadcastRooms();
 
     socket.on("join-room", (roomId) => {
+      console.log(`User ${socket.id} requesting to join room ${roomId}`);
       socket.join(roomId);
       if (!rooms[roomId]) {
         rooms[roomId] = { host: socket.id, players: [] };
+        console.log(`Room ${roomId} created with host ${socket.id}`);
       }
       if (!rooms[roomId].players.includes(socket.id)) {
         rooms[roomId].players.push(socket.id);
@@ -69,7 +71,7 @@ async function startServer() {
 
       // Notify others in the room
       socket.to(roomId).emit("player-joined", socket.id);
-      console.log(`User ${socket.id} joined room ${roomId}`);
+      console.log(`User ${socket.id} joined room ${roomId}. Total players: ${rooms[roomId].players.length}`);
       
       broadcastRooms();
     });

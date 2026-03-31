@@ -13,6 +13,7 @@ export default function App() {
   const [isHost, setIsHost] = useState(false);
   const [remotePlayers, setRemotePlayers] = useState<Record<string, any>>({});
   const [roomsList, setRoomsList] = useState<{ id: string; playerCount: number }[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
   const stateRef = useRef<any>(null);
 
   useEffect(() => {
@@ -34,11 +35,17 @@ export default function App() {
 
     socket.on('connect', () => {
       console.log('Connected to server:', socket.id);
+      setIsConnected(true);
       // If we were already in a room, re-join it on reconnection
       const currentRoomId = stateRef.current?.roomId;
       if (currentRoomId && stateRef.current?.isJoined) {
         socket.emit('join-room', currentRoomId);
       }
+    });
+
+    socket.on('connect_error', (err) => {
+      console.error('Connection error:', err);
+      setIsConnected(false);
     });
 
     socket.on('rooms-list', (list) => {
@@ -51,6 +58,18 @@ export default function App() {
         stateRef.current.isHost = data.isHost;
         stateRef.current.roomId = data.roomId;
         stateRef.current.isJoined = true;
+        // If we are joining an existing room as a client, clear local state
+        // to ensure we only see what the host syncs.
+        if (!data.isHost) {
+          stateRef.current.enemies = [];
+          stateRef.current.drops = [];
+          stateRef.current.constructions = {
+            fenceBuilt: false,
+            fenceSegments: [],
+            towers: [],
+            helpers: []
+          };
+        }
       }
       console.log('Joined room:', data.roomId, 'Host:', data.isHost);
     });
@@ -112,6 +131,7 @@ export default function App() {
       if (stateRef.current && !stateRef.current.isHost) {
         stateRef.current.enemies = gameState.enemies;
         stateRef.current.drops = gameState.drops;
+        stateRef.current.resources = gameState.resources;
         stateRef.current.constructions = gameState.constructions;
         stateRef.current.timeOfDay = gameState.timeOfDay;
         stateRef.current.day = gameState.day;
@@ -133,6 +153,7 @@ export default function App() {
 
     socket.on('disconnect', (reason) => {
       console.log('Disconnected from server:', reason);
+      setIsConnected(false);
     });
 
     return () => {
@@ -161,6 +182,11 @@ export default function App() {
 
     // Multiplayer Socket Setup
     if (isJoined && socketRef.current) {
+      console.log('Attempting to join room:', roomId);
+      if (stateRef.current) {
+        stateRef.current.roomId = roomId;
+        stateRef.current.isJoined = true;
+      }
       socketRef.current.emit('join-room', roomId);
     }
 
@@ -307,6 +333,7 @@ export default function App() {
       isHost: boolean;
       roomId: string;
       remotePlayers: Record<string, any>;
+      frame: number;
     }
 
     function initialState(): GameState {
@@ -403,6 +430,7 @@ export default function App() {
         isHost: isHost,
         roomId: roomId,
         remotePlayers: {},
+        frame: 0,
       };
     }
 
@@ -1564,6 +1592,7 @@ export default function App() {
     }
 
     function updateGame() {
+      state.frame++;
       if (state.status !== 'playing') return;
 
       state.timeElapsed += 1/60;
@@ -1592,11 +1621,12 @@ export default function App() {
           frame: state.player.frame
         });
 
-        if (state.isHost) {
+        if (state.isHost && state.frame % 10 === 0) {
           socketRef.current.emit('sync-game-state', {
             roomId: state.roomId,
             enemies: state.enemies,
             drops: state.drops,
+            resources: state.resources,
             constructions: state.constructions,
             timeOfDay: state.timeOfDay,
             day: state.day
@@ -1606,8 +1636,8 @@ export default function App() {
 
       autoCollectResources();
       
-      // Only host handles spawning and world updates
-      if (state.isHost) {
+      // Only host handles spawning and world updates (or single player)
+      if (!state.isJoined || state.isHost) {
         spawnEnemy();
         updateEnemies();
         updateDrops();
@@ -2854,8 +2884,18 @@ export default function App() {
 
         {/* New Responsive HUD */}
         <div className="hud-top">
-          <div className="health-container-top">
-            <div id="healthFill" className="hp-bar-fill" style={{ width: '100%' }} />
+          <div className="flex flex-col gap-1">
+            <div className="health-container-top">
+              <div id="healthFill" className="hp-bar-fill" style={{ width: '100%' }} />
+            </div>
+            {isJoined && (
+              <div className="flex items-center gap-2 px-2 py-0.5 bg-black/40 rounded-full border border-blue-500/30 w-fit">
+                <div className={`w-1.5 h-1.5 rounded-full ${isHost ? 'bg-yellow-400' : 'bg-blue-400'} animate-pulse`} />
+                <span className="text-[10px] text-white/80 font-mono uppercase tracking-wider">
+                  {isHost ? 'Host' : 'Client'} • Sala {roomId}
+                </span>
+              </div>
+            )}
           </div>
           
           <div className="hud-main-row">
@@ -2937,7 +2977,10 @@ export default function App() {
               </div>
             </div>
             <h1 className="text-3xl font-bold text-white tracking-tight">Multiplayer</h1>
-            <p className="text-blue-200/70 text-sm">Crie ou entre em uma sala para jogar com amigos.</p>
+            <div className="flex items-center justify-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
+              <p className="text-blue-200/70 text-sm">{isConnected ? 'Conectado ao servidor' : 'Conectando...'}</p>
+            </div>
             
             <div className="space-y-4">
               {roomsList.length > 0 && (
