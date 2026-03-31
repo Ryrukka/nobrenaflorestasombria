@@ -134,6 +134,7 @@ export default function App() {
         stateRef.current.drops = gameState.drops;
         stateRef.current.resources = gameState.resources;
         stateRef.current.constructions = gameState.constructions;
+        stateRef.current.projectiles = gameState.projectiles || [];
         stateRef.current.timeOfDay = gameState.timeOfDay;
         stateRef.current.day = gameState.day;
       }
@@ -328,6 +329,7 @@ export default function App() {
       constructions: any;
       towerSlots: any[];
       helperSlots: any[];
+      projectiles: any[];
       gameOver?: boolean;
       // Multiplayer
       isJoined: boolean;
@@ -379,6 +381,7 @@ export default function App() {
           stone: 0,
           fiber: 0,
           gold: 0,
+          slowed: 0,
           idleAttackTimer: 0,
           attackTimer: 0,
           attackAngle: 0,
@@ -431,6 +434,7 @@ export default function App() {
         isHost: isHost,
         roomId: roomId,
         remotePlayers: {},
+        projectiles: [] as any[],
         frame: 0,
       };
     }
@@ -861,7 +865,7 @@ export default function App() {
     window.addEventListener('touchmove', handleJoystickMove, { passive: false });
     window.addEventListener('touchend', handleJoystickEnd);
 
-    function movePlayer() {
+    function movePlayer(speed: number) {
       let xAxis = 0;
       let yAxis = 0;
       if (keys['w'] || keys['arrowup']) yAxis -= 1;
@@ -880,8 +884,8 @@ export default function App() {
         const speedMult = Math.min(1, len);
         xAxis /= len;
         yAxis /= len;
-        state.player.x += xAxis * state.player.speed * speedMult;
-        state.player.y += yAxis * state.player.speed * speedMult;
+        state.player.x += xAxis * speed * speedMult;
+        state.player.y += yAxis * speed * speedMult;
         moving = true;
         if (Math.abs(xAxis) > Math.abs(yAxis)) state.player.facing = xAxis < 0 ? 'left' : 'right';
         else state.player.facing = yAxis < 0 ? 'up' : 'down';
@@ -1027,15 +1031,15 @@ export default function App() {
       if (minutes >= 10) {
         spawnCount = 8;
         spawnInterval = 120; // 2s
-        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'boss'];
+        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer', 'shaman', 'boss'];
       } else if (minutes >= 5) {
         spawnCount = 6;
         spawnInterval = 150; // 2.5s
-        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton'];
+        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer', 'shaman'];
       } else if (minutes >= 2) {
         spawnCount = 5;
         spawnInterval = 180; // 3s
-        possibleTypes = ['normal', 'green', 'skeleton'];
+        possibleTypes = ['normal', 'green', 'skeleton', 'archer'];
       }
 
       state.spawnTimer = spawnInterval;
@@ -1054,10 +1058,12 @@ export default function App() {
           type = 'boss';
           showQuestMessage('¡O Rei Slime apareceu!', 4000);
         }
-        else if (possibleTypes.includes('armored') && r < 0.15) type = 'armored';
-        else if (possibleTypes.includes('skeleton') && r < 0.25) type = 'skeleton';
-        else if (possibleTypes.includes('fast') && r < 0.35) type = 'fast';
-        else if (possibleTypes.includes('green') && r < 0.55) type = 'green';
+        else if (possibleTypes.includes('shaman') && r < 0.10) type = 'shaman';
+        else if (possibleTypes.includes('archer') && r < 0.20) type = 'archer';
+        else if (possibleTypes.includes('armored') && r < 0.30) type = 'armored';
+        else if (possibleTypes.includes('skeleton') && r < 0.40) type = 'skeleton';
+        else if (possibleTypes.includes('fast') && r < 0.50) type = 'fast';
+        else if (possibleTypes.includes('green') && r < 0.70) type = 'green';
 
         const hpMult = 1 + (state.day - 1) * 0.2;
         const dmgMult = 1 + (state.day - 1) * 0.1;
@@ -1100,6 +1106,18 @@ export default function App() {
           damage *= 1.4;
           size = 1.2;
           color = '#e0e0e0'; // Skeleton Bone
+        } else if (type === 'archer') {
+          baseHp *= 0.8;
+          speed *= 0.7;
+          damage *= 1.0;
+          size = 1.0;
+          color = '#ff8c00'; // Dark Orange Archer
+        } else if (type === 'shaman') {
+          baseHp *= 1.5;
+          speed *= 0.6;
+          damage *= 0.5;
+          size = 1.1;
+          color = '#9932cc'; // Dark Orchid Shaman
         }
 
         state.enemies.push({
@@ -1206,21 +1224,57 @@ export default function App() {
           const prevX = enemy.x;
           const prevY = enemy.y;
 
-          if (d > 14) {
+          if (enemy.type === 'archer') {
+            const distToPlayer = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
+            if (distToPlayer > 180) {
+              enemy.x += (dx / d) * enemy.speed;
+              enemy.y += (dy / d) * enemy.speed;
+            } else if (distToPlayer < 120) {
+              enemy.x -= (dx / d) * enemy.speed;
+              enemy.y -= (dy / d) * enemy.speed;
+            }
+
+            if (enemy.cooldown <= 0 && distToPlayer < 250) {
+              enemy.cooldown = 120; // 2s between shots
+              const ang = Math.atan2(state.player.y - enemy.y, state.player.x - enemy.x);
+              state.projectiles.push({
+                x: enemy.x,
+                y: enemy.y,
+                vx: Math.cos(ang) * 3,
+                vy: Math.sin(ang) * 3,
+                damage: enemy.damage * 10,
+                life: 180,
+                color: '#ff8c00'
+              });
+            }
+          } else if (enemy.type === 'shaman') {
             enemy.x += (dx / d) * enemy.speed;
             enemy.y += (dy / d) * enemy.speed;
-          } else if (enemy.cooldown <= 0) {
-            enemy.cooldown = 48;
-            if (target.type === 'segment' && target.ref) {
-              target.ref.hp -= 8;
-              target.ref.hitFlash = 5;
+
+            const distToPlayer = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
+            if (distToPlayer < 80 && enemy.cooldown <= 0) {
+              enemy.cooldown = 180; // 3s between debuffs
+              state.player.slowed = 120; // 2s slow
+              addEffect(state.player.x, state.player.y - 20, 'LENTO!', '#9932cc');
               triggerShake(2);
-              addEffect(target.ref.x1 || target.ref.x, target.ref.y1 || target.ref.y, '-8', '#ff5252');
-              addEffect(target.x, target.y - 6, '-8', '#d86b60');
-            } else {
-              state.player.health = clamp(state.player.health - enemy.damage * 8, 0, 100);
-              state.player.hitFlash = 5;
-              triggerShake(4);
+            }
+          } else {
+            if (d > 14) {
+              enemy.x += (dx / d) * enemy.speed;
+              enemy.y += (dy / d) * enemy.speed;
+            } else if (enemy.cooldown <= 0) {
+              enemy.cooldown = 48;
+              if (target.type === 'segment' && target.ref) {
+                target.ref.hp -= 8;
+                target.ref.hitFlash = 5;
+                triggerShake(2);
+                addEffect(target.ref.x1 || target.ref.x, target.ref.y1 || target.ref.y, '-8', '#ff5252');
+                addEffect(target.x, target.y - 6, '-8', '#d86b60');
+              } else {
+                state.player.health = clamp(state.player.health - enemy.damage * 8, 0, 100);
+                state.player.hitFlash = 5;
+                triggerShake(4);
+              }
             }
           }
 
@@ -1592,11 +1646,35 @@ export default function App() {
       state.cameraShake *= 0.88;
     }
 
+    function updateProjectiles() {
+      for (let i = state.projectiles.length - 1; i >= 0; i--) {
+        const p = state.projectiles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+
+        const d = Math.hypot(p.x - state.player.x, p.y - state.player.y);
+        if (d < 15) {
+          state.player.health = Math.max(0, state.player.health - p.damage);
+          state.player.hitFlash = 5;
+          triggerShake(3);
+          state.projectiles.splice(i, 1);
+          continue;
+        }
+
+        if (p.life <= 0) {
+          state.projectiles.splice(i, 1);
+        }
+      }
+    }
+
     function updateGame() {
       state.frame++;
       if (state.status !== 'playing') return;
 
       state.timeElapsed += 1/60;
+      state.player.slowed = Math.max(0, state.player.slowed - 1);
+      const currentSpeed = state.player.slowed > 0 ? state.player.speed * 0.5 : state.player.speed;
       state.timeOfDay += DAY_SPEED;
       state.pulse = (state.pulse + 0.05) % (Math.PI * 2);
       
@@ -1605,7 +1683,8 @@ export default function App() {
         state.day += 1;
       }
 
-      movePlayer();
+      movePlayer(currentSpeed);
+      updateProjectiles();
       updatePlayerCombat();
       updateEffects();
       state.cameraShake *= 0.88;
@@ -1629,6 +1708,7 @@ export default function App() {
             drops: state.drops,
             resources: state.resources,
             constructions: state.constructions,
+            projectiles: state.projectiles,
             timeOfDay: state.timeOfDay,
             day: state.day
           });
@@ -2570,6 +2650,48 @@ export default function App() {
         ctx.fillRect(e.x + 8 * s, e.y + 5 * s + bob, 4 * s, 15 * s);
         ctx.fillStyle = '#546e7a';
         ctx.fillRect(e.x + 6 * s, e.y + 18 * s + bob, 8 * s, 2 * s);
+      } else if (e.type === 'archer') {
+        // ARCHER (Orange Slime with Bow)
+        ctx.fillStyle = '#ff8c00';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y + bob, 15 * s, 0, Math.PI * 2);
+        ctx.fill();
+        // Bow
+        ctx.strokeStyle = '#5d4037';
+        ctx.lineWidth = 3 * s;
+        ctx.beginPath();
+        ctx.arc(e.x + 10 * s, e.y + bob, 12 * s, -Math.PI/2, Math.PI/2);
+        ctx.stroke();
+        // Eyes
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(e.x - 4 * s, e.y - 2 * s + bob, 3 * s, 0, Math.PI * 2);
+        ctx.arc(e.x + 4 * s, e.y - 2 * s + bob, 3 * s, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (e.type === 'shaman') {
+        // SHAMAN (Purple Slime with Staff)
+        ctx.fillStyle = '#9932cc';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y + bob, 16 * s, 0, Math.PI * 2);
+        ctx.fill();
+        // Staff
+        ctx.strokeStyle = '#4e342e';
+        ctx.lineWidth = 4 * s;
+        ctx.beginPath();
+        ctx.moveTo(e.x + 12 * s, e.y - 15 * s + bob);
+        ctx.lineTo(e.x + 12 * s, e.y + 15 * s + bob);
+        ctx.stroke();
+        // Staff Gem
+        ctx.fillStyle = '#e91e63';
+        ctx.beginPath();
+        ctx.arc(e.x + 12 * s, e.y - 18 * s + bob, 5 * s, 0, Math.PI * 2);
+        ctx.fill();
+        // Eyes (Glowing)
+        ctx.fillStyle = '#ffeb3b';
+        ctx.beginPath();
+        ctx.arc(e.x - 5 * s, e.y - 3 * s + bob, 4 * s, 0, Math.PI * 2);
+        ctx.arc(e.x + 5 * s, e.y - 3 * s + bob, 4 * s, 0, Math.PI * 2);
+        ctx.fill();
       } else {
         // SLIME (Dynamic Color)
         ctx.fillStyle = e.color || '#2196f3';
@@ -2616,6 +2738,20 @@ export default function App() {
       ctx.fillRect(e.x - 12 * s, e.y - 25 * s, 24 * s, 4);
       ctx.fillStyle = '#ca6755';
       ctx.fillRect(e.x - 12 * s, e.y - 25 * s, 24 * s * (e.hp / e.maxHp), 4);
+    }
+
+    function drawProjectile(p: any) {
+      ctx.fillStyle = p.color || '#fff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      // Glow
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = p.color || '#fff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
     }
 
     function drawEffects() {
@@ -2814,6 +2950,7 @@ export default function App() {
         ...state.drops.map(d => ({ y: d.y, draw: () => drawDrop(d) })),
         { y: state.player.y, draw: () => drawPlayer() },
         ...state.enemies.map(e => ({ y: e.y, draw: () => drawEnemy(e) })),
+        ...state.projectiles.map(p => ({ y: p.y, draw: () => drawProjectile(p) })),
       ];
 
       // Sort by Y coordinate

@@ -38,12 +38,19 @@ async function startServer() {
   // Multiplayer logic
   const rooms: Record<string, { host: string; players: string[] }> = {};
 
-  function broadcastRooms() {
+  function broadcastRooms(targetSocket?: any) {
     const roomList = Object.keys(rooms).map(id => ({
       id,
       playerCount: rooms[id].players.length
     }));
-    io.emit("rooms-list", roomList);
+    
+    console.log(`Broadcasting rooms list (${roomList.length} rooms) to ${targetSocket ? 'socket ' + targetSocket.id : 'everyone'}`);
+    
+    if (targetSocket) {
+      targetSocket.emit("rooms-list", roomList);
+    } else {
+      io.emit("rooms-list", roomList);
+    }
   }
 
   function leaveAllRooms(socketId: string) {
@@ -62,6 +69,7 @@ async function startServer() {
         }
 
         if (room.players.length === 0) {
+          console.log(`Room ${roomId} deleted (no players left)`);
           delete rooms[roomId];
         }
         changed = true;
@@ -78,11 +86,14 @@ async function startServer() {
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
     
-    // Send current rooms to the new user
-    broadcastRooms();
+    // Send current rooms specifically to the new user after a short delay
+    // to ensure their listeners are ready.
+    setTimeout(() => {
+      broadcastRooms(socket);
+    }, 500);
 
     socket.on("request-rooms", () => {
-      broadcastRooms();
+      broadcastRooms(socket);
     });
 
     socket.on("join-room", (roomId) => {
