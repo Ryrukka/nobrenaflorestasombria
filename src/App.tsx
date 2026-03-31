@@ -27,12 +27,29 @@ export default function App() {
       helpers: []
     },
     projectiles: [],
+    summons: [],
+    effects: [],
     timeOfDay: 0.42,
     day: 1,
     isJoined: false,
     isHost: false,
     roomId: '',
-    frame: 0
+    frame: 0,
+    spawnTimer: 0,
+    timeElapsed: 0,
+    status: 'playing',
+    player: {
+      x: 430, y: 320,
+      health: 100, maxHealth: 100,
+      gold: 50, wood: 20, stone: 10, fiber: 5,
+      speed: 2.2, damage: 12,
+      attackCooldown: 30, attackTimer: 0,
+      facing: 'right', frame: 0,
+      hitFlash: 0, slowed: 0,
+      idleAttackTimer: 0
+    },
+    campfire: { x: 430, y: 320, health: 100, maxHealth: 100 },
+    pulse: 0
   });
 
   useEffect(() => {
@@ -959,9 +976,28 @@ export default function App() {
     }
 
     function autoCollectResources() {
+      // Player collection
       state.resources = state.resources.filter(res => {
         if (res.respawning) return true;
-        if (Math.hypot(state.player.x - res.x, state.player.y - res.y) <= AUTO_COLLECT_RADIUS) {
+        
+        // Check player
+        const distToPlayer = Math.hypot(state.player.x - res.x, state.player.y - res.y);
+        let collectedBy = null;
+        
+        if (distToPlayer <= AUTO_COLLECT_RADIUS) {
+          collectedBy = state.player;
+        } else {
+          // Check helpers
+          for (const h of state.constructions.helpers) {
+            const distToHelper = Math.hypot(h.x - res.x, h.y - res.y);
+            if (distToHelper <= 25) {
+              collectedBy = h;
+              break;
+            }
+          }
+        }
+
+        if (collectedBy) {
           const type = res.type;
           if (type === 'egg') {
             state.player.gold += 20;
@@ -1487,11 +1523,40 @@ export default function App() {
         
         let target = null;
         let best = Infinity;
+        
+        // 1. Look for enemies in range
         for (const enemy of state.enemies) {
           const d = Math.hypot(h.x - enemy.x, h.y - enemy.y);
           if (d < h.range && d < best) { best = d; target = enemy; }
         }
 
+        // 2. If no enemy in range, look for resources to collect
+        let resourceTarget = null;
+        if (!target) {
+          let bestResDist = Infinity;
+          for (const res of state.resources) {
+            if (res.respawning) continue;
+            const d = Math.hypot(h.x - res.x, h.y - res.y);
+            if (d < 250 && d < bestResDist) {
+              bestResDist = d;
+              resourceTarget = res;
+            }
+          }
+        }
+
+        // 3. If no resource, look for enemies further away (hunting)
+        if (!target && !resourceTarget) {
+          let bestHuntDist = Infinity;
+          for (const enemy of state.enemies) {
+            const d = Math.hypot(h.x - enemy.x, h.y - enemy.y);
+            if (d < 400 && d < bestHuntDist) {
+              bestHuntDist = d;
+              target = enemy;
+            }
+          }
+        }
+
+        // Movement and Action Logic based on type
         if (h.type === 'warrior') {
           if (target) {
             const ang = Math.atan2(target.y - h.y, target.x - h.x);
@@ -1506,10 +1571,8 @@ export default function App() {
               target.hitFlash = 5;
               target.vx += Math.cos(ang) * 4;
               target.vy += Math.sin(ang) * 4;
-              // Level 4 Fury: faster attack
               h.cooldown = h.level >= 4 ? 24 : 32;
               addEffect(target.x, target.y, `-${h.damage}`, '#ff5252');
-              // Slash effect for Warrior
               state.particles.push({
                 x: (h.x + target.x) / 2,
                 y: (h.y + target.y) / 2,
@@ -1520,6 +1583,15 @@ export default function App() {
                 type: 'slash'
               });
               if (target.hp <= 0) { state.player.gold += 1; }
+            }
+          } else if (resourceTarget) {
+            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
+            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
+            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
+            if (dist > 5) {
+              h.x += Math.cos(ang) * 2.5;
+              h.y += Math.sin(ang) * 2.5;
+              h.walkTimer = (h.walkTimer || 0) + 1;
             }
           } else {
             const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
@@ -1535,11 +1607,17 @@ export default function App() {
           }
         } else if (h.type === 'mage') {
           if (target) {
+            const ang = Math.atan2(target.y - h.y, target.x - h.x);
+            const dist = Math.hypot(target.x - h.x, target.y - h.y);
             h.facing = target.x < h.x ? 'left' : 'right';
-            if (h.cooldown === 0) {
+            
+            if (dist > 150) {
+              h.x += Math.cos(ang) * 2.5;
+              h.y += Math.sin(ang) * 2.5;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+            } else if (h.cooldown === 0) {
               h.cooldown = 60;
               addPulse(h.x, h.y, '#9c27b0');
-              // Magical Fireball Effect
               state.particles.push({
                 x: h.x, y: h.y,
                 vx: (target.x - h.x) * 0.05,
@@ -1549,14 +1627,12 @@ export default function App() {
                 color: h.level >= 3 ? '#e1bee7' : '#ba68c8',
                 type: 'cloud'
               });
-              // AOE Damage
               const aoeRange = h.level >= 3 ? 90 : 65;
               for (const e of state.enemies) {
                 const ed = Math.hypot(target.x - e.x, target.y - e.y);
                 if (ed < aoeRange) {
                   e.hp -= h.damage * 1.5;
                   e.hitFlash = 5;
-                  // Level 4 Freeze
                   if (h.level >= 4) {
                     e.slowTimer = (e.slowTimer || 0) + 120;
                     addEffect(e.x, e.y - 10, 'CONGELADO!', '#4fc3f7');
@@ -1568,54 +1644,110 @@ export default function App() {
               addPulse(target.x, target.y, h.level >= 3 ? '#ba68c8' : '#e1bee7');
               triggerShake(2);
             }
+          } else if (resourceTarget) {
+            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
+            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
+            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
+            if (dist > 5) {
+              h.x += Math.cos(ang) * 2.2;
+              h.y += Math.sin(ang) * 2.2;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+            }
+          } else {
+            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
+            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
+            if (dist > 3) {
+              h.x += Math.cos(ang) * 1.8;
+              h.y += Math.sin(ang) * 1.8;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+              h.facing = h.homeX < h.x ? 'left' : 'right';
+            } else {
+              h.walkTimer = 0;
+            }
           }
         } else if (h.type === 'summoner') {
           if (target) h.facing = target.x < h.x ? 'left' : 'right';
           if (h.cooldown === 0) {
             h.cooldown = 240;
             addPulse(h.x, h.y, '#4db6ac');
-            
             const summonCount = h.level >= 3 ? 2 : 1;
             for (let sIdx = 0; sIdx < summonCount; sIdx++) {
               state.summons.push({
-                x: h.x + (sIdx * 10 - 5), y: h.y + (sIdx * 10 - 5),
-                vx: 0, vy: 0,
-                hp: h.level >= 4 ? 150 : 100,
-                maxHp: h.level >= 4 ? 150 : 100,
-                damage: h.level >= 4 ? 18 : 12,
-                speed: 1.2,
-                life: 1200, // 20 seconds
-                cooldown: 0,
-                type: 'golem'
+                x: h.x + rand(-20, 20),
+                y: h.y + rand(-20, 20),
+                hp: 50 + h.level * 10,
+                maxHp: 50 + h.level * 10,
+                damage: 5 + h.level * 2,
+                life: 600,
+                type: h.level >= 4 ? 'golem' : 'spirit',
+                cooldown: 0
               });
             }
-            showQuestMessage(summonCount > 1 ? '¡Golems Invocados!' : '¡Golem Invocado!', 2000);
+          }
+          if (!target && resourceTarget) {
+            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
+            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
+            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
+            if (dist > 5) {
+              h.x += Math.cos(ang) * 2.0;
+              h.y += Math.sin(ang) * 2.0;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+            }
+          } else if (!target) {
+            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
+            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
+            if (dist > 3) {
+              h.x += Math.cos(ang) * 1.5;
+              h.y += Math.sin(ang) * 1.5;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+              h.facing = h.homeX < h.x ? 'left' : 'right';
+            } else {
+              h.walkTimer = 0;
+            }
           }
         } else {
           // Archer / Sniper
-          if (target && h.cooldown === 0) {
-            const isSniper = h.type === 'sniper';
-            let finalDamage = h.damage;
+          if (target) {
+            const ang = Math.atan2(target.y - h.y, target.x - h.x);
+            const dist = Math.hypot(target.x - h.x, target.y - h.y);
+            h.facing = target.x < h.x ? 'left' : 'right';
             
-            // Level 4 Sniper: Double damage
-            if (isSniper && h.level >= 4) finalDamage *= 2;
-            
-            // Level 4 Archer: Crit chance
-            const isCrit = !isSniper && h.level >= 4 && Math.random() < 0.15;
-            if (isCrit) finalDamage *= 2;
+            if (h.cooldown === 0) {
+              const isSniper = h.type === 'sniper';
+              let finalDamage = h.damage;
+              if (isSniper && h.level >= 4) finalDamage *= 2;
+              const isCrit = !isSniper && h.level >= 4 && Math.random() < 0.15;
+              if (isCrit) finalDamage *= 2;
 
-            target.hp -= finalDamage;
-            target.hitFlash = 5;
-            h.cooldown = isSniper ? 110 : 28;
-            
-            // Level 3 Archer: Double shot
-            if (!isSniper && h.level >= 3 && Math.random() < 0.2) {
-              h.cooldown = 5; // Rapid fire next shot
+              target.hp -= finalDamage;
+              target.hitFlash = 5;
+              h.cooldown = isSniper ? 110 : 28;
+              if (!isSniper && h.level >= 3 && Math.random() < 0.2) h.cooldown = 5;
+
+              addEffect(target.x, target.y, `-${Math.round(finalDamage)}`, isCrit ? '#ffd700' : '#ff5252');
+              addPulse(target.x, target.y, isSniper ? '#ff4444' : '#f1d28c');
+              if (target.hp <= 0) { state.player.gold += 1; }
             }
-
-            addEffect(target.x, target.y, `-${Math.round(finalDamage)}`, isCrit ? '#ffd700' : '#ff5252');
-            addPulse(target.x, target.y, isSniper ? '#ff4444' : '#f1d28c');
-            if (target.hp <= 0) { state.player.gold += 1; }
+          } else if (resourceTarget) {
+            const ang = Math.atan2(resourceTarget.y - h.y, resourceTarget.x - h.x);
+            const dist = Math.hypot(resourceTarget.x - h.x, resourceTarget.y - h.y);
+            h.facing = resourceTarget.x < h.x ? 'left' : 'right';
+            if (dist > 5) {
+              h.x += Math.cos(ang) * 2.2;
+              h.y += Math.sin(ang) * 2.2;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+            }
+          } else {
+            const ang = Math.atan2(h.homeY - h.y, h.homeX - h.x);
+            const dist = Math.hypot(h.homeX - h.x, h.homeY - h.y);
+            if (dist > 3) {
+              h.x += Math.cos(ang) * 2.0;
+              h.y += Math.sin(ang) * 2.0;
+              h.walkTimer = (h.walkTimer || 0) + 1;
+              h.facing = h.homeX < h.x ? 'left' : 'right';
+            } else {
+              h.walkTimer = 0;
+            }
           }
         }
       }
