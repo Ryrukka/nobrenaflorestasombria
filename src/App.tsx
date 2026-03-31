@@ -164,6 +164,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!gameStarted || !isJoined) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -3013,7 +3014,7 @@ export default function App() {
       ui.joystickBase?.removeEventListener('pointercancel', endJoystick);
       ui.joystickBase?.removeEventListener('lostpointercapture', endJoystick);
     };
-  }, [gameStarted]);
+  }, [gameStarted, isJoined]);
 
   return (
     <div className="app-container">
@@ -3107,122 +3108,150 @@ export default function App() {
 
         {/* Room Selection Overlay */}
       {!isJoined && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="dq-window w-full max-w-md p-8 text-center space-y-6">
-            <div className="flex justify-center mb-4">
-              <div className="p-4 bg-blue-500/20 rounded-full border-2 border-blue-400/50">
-                <Globe className="w-12 h-12 text-blue-400" />
-              </div>
-            </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Multiplayer</h1>
-            <div className="flex items-center justify-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
-              <p className="text-blue-200/70 text-sm">{isConnected ? 'Conectado ao servidor' : 'Conectando...'}</p>
-            </div>
-            
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-blue-400 uppercase tracking-wider text-left">Salas Ativas</p>
-                  <button 
-                    onClick={() => socketRef.current?.emit('request-rooms')}
-                    className="p-1 hover:bg-white/10 rounded-full transition-colors group"
-                    title="Atualizar Lista"
-                  >
-                    <Globe className="w-3 h-3 text-blue-400/50 group-hover:text-blue-400 group-hover:rotate-180 transition-all duration-500" />
-                  </button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
+          <div className="dq-window w-full max-w-md p-8 text-center space-y-6 shadow-2xl border-4 border-blue-400/30">
+            {!gameStarted ? (
+              <div className="space-y-6">
+                <div className="flex justify-center mb-4">
+                  <div className="p-6 bg-blue-500/20 rounded-full border-4 border-blue-400/50 shadow-[0_0_20px_rgba(96,165,250,0.3)]">
+                    <Play className="w-16 h-16 text-blue-400 fill-blue-400/20" />
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
-                  {roomsList.length > 0 ? (
-                    roomsList.map((room) => (
-                      <button
-                        key={room.id}
-                        onClick={() => {
-                          setRoomId(room.id);
-                          setIsJoined(true);
-                          setGameStarted(true);
-                        }}
-                        className="flex items-center justify-between p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl hover:bg-blue-500/20 transition-all group"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                          <span className="text-white font-medium">Sala {room.id}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-blue-300/60 text-xs">
-                          <Users className="w-3 h-3" />
-                          <span>{room.playerCount} jogando</span>
-                        </div>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="p-4 bg-white/5 border border-white/10 rounded-xl text-center">
-                      <p className="text-blue-300/40 text-sm italic">Nenhuma sala ativa no momento</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    placeholder="ID da Sala (ex: 1234)"
-                    value={roomId}
-                    onChange={(e) => setRoomId(e.target.value)}
-                    className="w-full bg-black/40 border-2 border-blue-900/50 rounded-xl px-4 py-3 text-white placeholder:text-blue-900/50 focus:border-blue-500/50 outline-none transition-all"
-                  />
-                </div>
-                <button
-                  onClick={() => {
-                    const randomId = Math.floor(Math.random() * 1000).toString();
-                    setRoomId(randomId);
-                    setIsJoined(true);
-                    setGameStarted(true);
-                  }}
-                  className="px-4 py-3 bg-black/40 border-2 border-blue-900/50 rounded-xl text-white hover:border-blue-500/50 transition-all flex items-center gap-2"
-                  title="Criar Sala Aleatória"
+                <h1 className="text-4xl font-black text-white tracking-tighter uppercase italic">Nobre na Floresta</h1>
+                <p className="text-blue-200/70 text-sm leading-relaxed">
+                  Defenda seu acampamento dos monstros da floresta!<br/>
+                  Colete recursos de dia e sobreviva à noite.
+                </p>
+                
+                <button 
+                  onClick={() => setGameStarted(true)}
+                  className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xl rounded-xl shadow-[0_6px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-3 group"
                 >
-                  <Plus className="w-5 h-5" />
+                  <Play className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                  INICIAR JOGO
                 </button>
+
+                <div className="pt-4 border-t border-white/10 flex justify-center gap-6 opacity-40 text-[10px] uppercase tracking-widest font-bold text-blue-300">
+                  <span>WASD: MOVER</span>
+                  <span>CLIQUE: ATACAR</span>
+                  <span>1-3: CONSTRUIR</span>
+                </div>
               </div>
-              
-              <button
-                onClick={() => {
-                  if (roomId.trim()) {
-                    setIsJoined(true);
-                    setGameStarted(true);
-                  } else {
-                    alert('Por favor, digite um ID de sala.');
-                  }
-                }}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-[0_4px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2 group"
-              >
-                <LogIn className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                ENTRAR NA SALA
-              </button>
-            </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                    <Users className="w-6 h-6 text-blue-400" />
+                    Multiplayer
+                  </h2>
+                  <div className="flex items-center gap-2 px-3 py-1 bg-white/5 rounded-full border border-white/10">
+                    <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
+                    <span className="text-[10px] font-bold text-blue-200/50 uppercase tracking-tighter">
+                      {isConnected ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.2em] text-left">Salas Ativas</p>
+                      <button 
+                        onClick={() => socketRef.current?.emit('request-rooms')}
+                        className="p-1.5 hover:bg-white/10 rounded-full transition-all group active:scale-90"
+                        title="Atualizar Lista"
+                      >
+                        <Globe className="w-4 h-4 text-blue-400/50 group-hover:text-blue-400 group-hover:rotate-180 transition-all duration-700" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar min-h-[100px]">
+                      {roomsList.length > 0 ? (
+                        roomsList.map((room) => (
+                          <button
+                            key={room.id}
+                            onClick={() => {
+                              setRoomId(room.id);
+                              setIsJoined(true);
+                            }}
+                            className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl hover:bg-blue-500/15 hover:border-blue-400/40 transition-all group text-left"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
+                              <div>
+                                <span className="text-white font-bold block">Sala {room.id}</span>
+                                <span className="text-[10px] text-blue-300/40 uppercase font-black">Clique para entrar</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 px-2 py-1 bg-blue-500/10 rounded-lg text-blue-300 font-bold text-xs">
+                              <Users className="w-3 h-3" />
+                              <span>{room.playerCount}</span>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="flex flex-col items-center justify-center p-8 bg-white/5 border border-dashed border-white/10 rounded-xl text-center space-y-2">
+                          <Globe className="w-8 h-8 text-white/5" />
+                          <p className="text-blue-300/30 text-xs font-medium italic">Nenhuma sala ativa encontrada</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-4 border-t border-white/10">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="ID DA SALA..."
+                        value={roomId}
+                        onChange={(e) => setRoomId(e.target.value)}
+                        className="flex-1 bg-black/40 border-2 border-blue-900/50 rounded-xl px-4 py-3 text-white font-bold placeholder:text-blue-900/50 focus:border-blue-500/50 outline-none transition-all uppercase"
+                      />
+                      <button
+                        onClick={() => {
+                          const randomId = Math.floor(Math.random() * 9000 + 1000).toString();
+                          setRoomId(randomId);
+                          setIsJoined(true);
+                        }}
+                        className="px-5 py-3 bg-blue-600/20 border-2 border-blue-500/30 rounded-xl text-blue-400 hover:bg-blue-600/30 hover:border-blue-400 transition-all flex items-center gap-2 font-bold"
+                        title="Criar Nova Sala"
+                      >
+                        <Plus className="w-5 h-5" />
+                        NOVA
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => {
+                          if (roomId.trim()) {
+                            setIsJoined(true);
+                          } else {
+                            alert('Digite um ID de sala.');
+                          }
+                        }}
+                        className="py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl shadow-[0_4px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2 group"
+                      >
+                        <LogIn className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                        ENTRAR
+                      </button>
+                      <button
+                        onClick={() => {
+                          const soloId = "SOLO-" + Math.floor(Math.random() * 100000);
+                          setRoomId(soloId);
+                          setIsJoined(true);
+                        }}
+                        className="py-4 bg-zinc-800 hover:bg-zinc-700 text-white font-black rounded-xl shadow-[0_4px_0_rgb(39,39,42)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2"
+                      >
+                        JOGAR SOLO
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
-
-      {/* Title Overlay */}
-        {!gameStarted && (
-          <div id="titleOverlay" className="overlay">
-            <div className="card dq-window">
-              <h1>NOBRE NA FLORESTA</h1>
-              <p>Defenda seu acampamento dos monstros da floresta! Colete recursos durante o dia e prepare-se para a noite.</p>
-              
-              <button id="startBtn" className="btn-start">
-                <Play size={20} /> INICIAR JOGO
-              </button>
-
-              <div style={{ marginTop: '20px', fontSize: '12px', color: '#888' }}>
-                PC: WASD para mover, Clique para atacar, 1-3 para construir<br/>
-                Mobile: Joystick e botões na tela
-              </div>
-            </div>
-          </div>
-        )}
 
         <div id="gameOverOverlay" className="overlay" style={{ display: 'none' }}>
           <div className="card dq-window">

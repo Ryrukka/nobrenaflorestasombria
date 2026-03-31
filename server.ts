@@ -44,7 +44,12 @@ async function startServer() {
       playerCount: rooms[id].players.length
     }));
     
-    console.log(`Broadcasting rooms list (${roomList.length} rooms) to ${targetSocket ? 'socket ' + targetSocket.id : 'everyone'}`);
+    if (roomList.length > 0 || targetSocket) {
+      console.log(`Broadcasting rooms list (${roomList.length} rooms) to ${targetSocket ? 'socket ' + targetSocket.id : 'everyone'}`);
+      if (roomList.length > 0) {
+        console.log('Active rooms:', JSON.stringify(roomList));
+      }
+    }
     
     if (targetSocket) {
       targetSocket.emit("rooms-list", roomList);
@@ -60,11 +65,13 @@ async function startServer() {
       const index = room.players.indexOf(socketId);
       if (index !== -1) {
         room.players.splice(index, 1);
+        console.log(`User ${socketId} left room ${roomId}. Remaining: ${room.players.length}`);
         io.to(roomId).emit("player-left", socketId);
         
         // If host left, assign a new host
         if (room.host === socketId && room.players.length > 0) {
           room.host = room.players[0];
+          console.log(`New host for room ${roomId}: ${room.host}`);
           io.to(room.host).emit("became-host");
         }
 
@@ -97,19 +104,20 @@ async function startServer() {
     });
 
     socket.on("join-room", (roomId) => {
-      console.log(`User ${socket.id} requesting to join room ${roomId}`);
+      if (!roomId) return;
+      console.log(`User ${socket.id} requesting to join room: "${roomId}"`);
       
       // Leave previous rooms first
       if (leaveAllRooms(socket.id)) {
-        // If we left rooms, broadcast the update
         broadcastRooms();
       }
 
       socket.join(roomId);
       if (!rooms[roomId]) {
         rooms[roomId] = { host: socket.id, players: [] };
-        console.log(`Room ${roomId} created with host ${socket.id}`);
+        console.log(`Room "${roomId}" created. Host: ${socket.id}`);
       }
+      
       if (!rooms[roomId].players.includes(socket.id)) {
         rooms[roomId].players.push(socket.id);
       }
@@ -122,7 +130,7 @@ async function startServer() {
 
       // Notify others in the room
       socket.to(roomId).emit("player-joined", socket.id);
-      console.log(`User ${socket.id} joined room ${roomId}. Total players: ${rooms[roomId].players.length}`);
+      console.log(`User ${socket.id} joined room "${roomId}". Total players: ${rooms[roomId].players.length}`);
       
       broadcastRooms();
     });
