@@ -25,8 +25,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const socket = io();
+    const socket = io({
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+    });
     socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('Connected to server:', socket.id);
+      // If we were already in a room, re-join it on reconnection
+      const currentRoomId = stateRef.current?.roomId;
+      if (currentRoomId && stateRef.current?.isJoined) {
+        socket.emit('join-room', currentRoomId);
+      }
+    });
 
     socket.on('rooms-list', (list) => {
       setRoomsList(list);
@@ -34,10 +47,16 @@ export default function App() {
 
     socket.on('room-joined', (data) => {
       setIsHost(data.isHost);
-      if (stateRef.current) stateRef.current.isHost = data.isHost;
+      if (stateRef.current) {
+        stateRef.current.isHost = data.isHost;
+        stateRef.current.roomId = data.roomId;
+        stateRef.current.isJoined = true;
+      }
+      console.log('Joined room:', data.roomId, 'Host:', data.isHost);
     });
 
     socket.on('player-joined', (id) => {
+      console.log('Player joined:', id);
       if (stateRef.current) {
         stateRef.current.remotePlayers[id] = { x: 430, y: 320, health: 100, maxHealth: 100 };
         setRemotePlayers({ ...stateRef.current.remotePlayers });
@@ -102,6 +121,7 @@ export default function App() {
     socket.on('became-host', () => {
       setIsHost(true);
       if (stateRef.current) stateRef.current.isHost = true;
+      console.log('You are now the host');
     });
 
     socket.on('player-left', (id) => {
@@ -109,6 +129,10 @@ export default function App() {
         delete stateRef.current.remotePlayers[id];
         setRemotePlayers({ ...stateRef.current.remotePlayers });
       }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('Disconnected from server:', reason);
     });
 
     return () => {
