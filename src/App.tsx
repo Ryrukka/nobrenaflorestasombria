@@ -326,12 +326,23 @@ export default function App() {
       return { x, y };
     };
 
-    function nextResourceType() {
+    function nextResourceType(currentTime?: number) {
+      const timeOfDay = currentTime !== undefined ? currentTime : state.timeOfDay;
+      const isNight = timeOfDay > 0.25 && timeOfDay < 0.75;
       const r = Math.random();
-      if (r < 0.42) return 'wood';
-      if (r < 0.74) return 'stone';
-      if (r < 0.94) return 'fiber';
-      return 'gold';
+      
+      if (isNight) {
+        // More gold and fiber at night
+        if (r < 0.30) return 'wood';
+        if (r < 0.55) return 'stone';
+        if (r < 0.80) return 'fiber';
+        return 'gold';
+      } else {
+        if (r < 0.42) return 'wood';
+        if (r < 0.74) return 'stone';
+        if (r < 0.94) return 'fiber';
+        return 'gold';
+      }
     }
 
     function makeResource(type: string) {
@@ -371,6 +382,8 @@ export default function App() {
       ambientParticles: any[];
       grass: any[];
       wave: number;
+      isWaveActive: boolean;
+      waveTimer: number;
       dayTime: number;
       player: any;
       campfire: any;
@@ -401,54 +414,126 @@ export default function App() {
   { level: 4, name: "Forte de Madeira", cost: { wood: 60, stone: 35, gold: 12 }, towers: 3, helpers: 2, dogs: 1, fence: true },
   { level: 5, name: "Cidadela", cost: { wood: 120, stone: 70, gold: 25 }, towers: 4, helpers: 4, dogs: 2, fence: true },
   { level: 6, name: "Fortaleza Real", cost: { wood: 200, stone: 120, gold: 50 }, towers: 6, helpers: 6, dogs: 3, fence: true },
+  { level: 7, name: "Reino Próspero", cost: { wood: 400, stone: 250, gold: 100 }, towers: 8, helpers: 8, dogs: 4, fence: true },
+  { level: 8, name: "Império Eterno", cost: { wood: 800, stone: 500, gold: 250 }, towers: 10, helpers: 10, dogs: 6, fence: true },
 ];
 
 function syncBaseDefenses(state: any) {
-  const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level);
+  const cfLevel = state.campfire.level;
+  const levelData = CAMPFIRE_LEVELS.find(l => l.level === cfLevel);
   if (!levelData) return;
 
-  // Sync Fence
+  // 1. Sync & Upgrade Fence
   if (levelData.fence && !state.constructions.fenceBuilt) {
     state.constructions.fenceBuilt = true;
     state.constructions.fenceSegments = createFenceSegments(state.campfire);
   }
+  if (state.constructions.fenceBuilt) {
+    state.constructions.fenceSegments.forEach((seg: any) => {
+      if (seg.level < cfLevel) {
+        const diff = cfLevel - seg.level;
+        seg.level = cfLevel;
+        seg.maxHp += 80 * diff;
+        seg.hp = seg.maxHp;
+      }
+    });
+  }
 
-  // Sync Towers
+  // 2. Sync & Upgrade Towers
+  state.constructions.towers.forEach((t: any) => {
+    if (t.level < cfLevel) {
+      const diff = cfLevel - t.level;
+      t.level = cfLevel;
+      t.damage += 5 * diff;
+      t.range += 10 * diff;
+      t.maxHp += 50 * diff;
+      t.hp = t.maxHp;
+    }
+  });
   while (state.constructions.towers.length < levelData.towers) {
     const slot = state.towerSlots.find(s => !s.used);
     if (slot) {
       slot.used = true;
-      state.constructions.towers.push({ x: slot.x, y: slot.y, level: 1, hp: 100, maxHp: 100, damage: 10, range: 130, cooldown: 0 });
+      const t = { x: slot.x, y: slot.y, level: 1, hp: 100, maxHp: 100, damage: 10, range: 130, cooldown: 0 };
+      if (cfLevel > 1) {
+        const diff = cfLevel - 1;
+        t.level = cfLevel;
+        t.damage += 5 * diff;
+        t.range += 10 * diff;
+        t.maxHp += 50 * diff;
+        t.hp = t.maxHp;
+      }
+      state.constructions.towers.push(t);
     } else break;
   }
 
-  // Sync Dogs
+  // 3. Sync & Upgrade Dogs
+  state.constructions.dogs.forEach((d: any) => {
+    if (d.level < cfLevel) {
+      const diff = cfLevel - d.level;
+      d.level = cfLevel;
+      d.damage += 10 * diff;
+      d.maxHp += 40 * diff;
+      d.hp = d.maxHp;
+    }
+  });
   while (state.constructions.dogs.length < levelData.dogs) {
     const angle = Math.random() * Math.PI * 2;
     const dist = 60;
     const dx = state.campfire.x + Math.cos(angle) * dist;
     const dy = state.campfire.y + Math.sin(angle) * dist;
-    state.constructions.dogs.push({
+    const d = {
       x: dx, y: dy, homeX: dx, homeY: dy,
       level: 1, hp: 80, maxHp: 80, damage: 20, speed: 4.5,
       cooldown: 0, facing: 'right', walkTimer: 0
-    });
+    };
+    if (cfLevel > 1) {
+      const diff = cfLevel - 1;
+      d.level = cfLevel;
+      d.damage += 10 * diff;
+      d.maxHp += 40 * diff;
+      d.hp = d.maxHp;
+    }
+    state.constructions.dogs.push(d);
   }
 
-  // Sync Helpers
+  // 4. Sync & Upgrade Helpers
+  state.constructions.helpers.forEach((h: any) => {
+    if (h.level < cfLevel) {
+      const diff = cfLevel - h.level;
+      h.level = cfLevel;
+      h.damage += 4 * diff;
+      h.range += 10 * diff;
+      h.maxHp += 40 * diff;
+      h.hp = h.maxHp;
+    }
+  });
   while (state.constructions.helpers.length < levelData.helpers) {
     const slot = state.helperSlots.find(s => !s.used);
     if (slot) {
       slot.used = true;
       const types = ['warrior', 'archer', 'mage', 'sniper', 'summoner'];
       const hType = types[state.constructions.helpers.length % types.length];
-      state.constructions.helpers.push({
+      const h: any = {
         x: slot.x, y: slot.y, homeX: slot.x, homeY: slot.y,
         level: 1, type: hType, hp: 100, maxHp: 100,
         damage: 8, range: 120, cooldown: 0, summonTimer: 0,
         state: 'idle', target: null as any, attackCooldown: 0,
         speechCooldown: rand(100, 300), speechText: '', speechTimer: 0
-      });
+      };
+      if (hType === 'warrior') { h.hp = 180; h.maxHp = 180; h.damage = 16; h.range = 130; }
+      if (hType === 'sniper') { h.hp = 80; h.maxHp = 80; h.damage = 32; h.range = 260; h.cooldown = 100; }
+      if (hType === 'mage') { h.hp = 90; h.maxHp = 90; h.damage = 12; h.range = 180; h.cooldown = 60; }
+      if (hType === 'summoner') { h.hp = 100; h.maxHp = 100; h.damage = 0; h.range = 200; h.cooldown = 180; }
+      if (cfLevel > 1) {
+        const diff = cfLevel - 1;
+        h.level = cfLevel;
+        h.damage += 4 * diff;
+        h.range += 10 * diff;
+        h.maxHp += 40 * diff;
+        h.hp = h.maxHp;
+      }
+      state.constructions.helpers.push(h);
     } else break;
   }
 }
@@ -481,6 +566,8 @@ function initialState(): GameState {
           type: Math.floor(rand(0, 3))
         })),
         wave: 1,
+        isWaveActive: true,
+        waveTimer: 60 * 60, // 60 seconds at 60fps
         dayTime: 0.42,
         player: {
           x: WIDTH / 2,
@@ -506,22 +593,22 @@ function initialState(): GameState {
           hasHitThisAttack: false,
         },
         campfire,
-        resources: Array.from({ length: 66 }, () => makeResource(nextResourceType())),
+        resources: Array.from({ length: 120 }, () => makeResource(nextResourceType(0.42))),
         enemies: [] as any[],
         summons: [] as any[],
-        trees: Array.from({ length: 165 }, () => {
+        trees: Array.from({ length: 250 }, () => {
           const pos = getPos(-50, WIDTH + 50, -50, HEIGHT + 50);
           return { x: pos.x, y: pos.y, size: rand(0.9, 1.4) };
         }),
-        rocks: Array.from({ length: 66 }, () => {
+        rocks: Array.from({ length: 120 }, () => {
           const pos = getPos(20, WIDTH - 20, 20, HEIGHT - 20);
           return { x: pos.x, y: pos.y, size: rand(0.8, 1.3) };
         }),
-        bushes: Array.from({ length: 135 }, () => {
+        bushes: Array.from({ length: 200 }, () => {
           const pos = getPos(20, WIDTH - 20, 20, HEIGHT - 20);
           return { x: pos.x, y: pos.y, size: rand(0.7, 1.2) };
         }),
-        mushrooms: Array.from({ length: 84 }, () => {
+        mushrooms: Array.from({ length: 150 }, () => {
           const pos = getPos(30, WIDTH - 30, 30, HEIGHT - 30);
           return { x: pos.x, y: pos.y };
         }),
@@ -537,6 +624,12 @@ function initialState(): GameState {
           { x: WIDTH / 2 + 142, y: HEIGHT / 2 - 140, used: false },
           { x: WIDTH / 2 - 142, y: HEIGHT / 2 + 142, used: false },
           { x: WIDTH / 2 + 142, y: HEIGHT / 2 + 142, used: false },
+          { x: WIDTH / 2 - 200, y: HEIGHT / 2, used: false },
+          { x: WIDTH / 2 + 200, y: HEIGHT / 2, used: false },
+          { x: WIDTH / 2, y: HEIGHT / 2 - 200, used: false },
+          { x: WIDTH / 2, y: HEIGHT / 2 + 200, used: false },
+          { x: WIDTH / 2 - 200, y: HEIGHT / 2 - 200, used: false },
+          { x: WIDTH / 2 + 200, y: HEIGHT / 2 - 200, used: false },
         ],
         helperSlots: [
           { x: WIDTH / 2 - 80, y: HEIGHT / 2 + 26, used: false },
@@ -544,6 +637,11 @@ function initialState(): GameState {
           { x: WIDTH / 2, y: HEIGHT / 2 - 56, used: false },
           { x: WIDTH / 2 - 120, y: HEIGHT / 2 - 40, used: false },
           { x: WIDTH / 2 + 120, y: HEIGHT / 2 - 40, used: false },
+          { x: WIDTH / 2 - 160, y: HEIGHT / 2 + 60, used: false },
+          { x: WIDTH / 2 + 160, y: HEIGHT / 2 + 60, used: false },
+          { x: WIDTH / 2, y: HEIGHT / 2 + 100, used: false },
+          { x: WIDTH / 2 - 100, y: HEIGHT / 2 + 120, used: false },
+          { x: WIDTH / 2 + 100, y: HEIGHT / 2 + 120, used: false },
         ],
         isJoined: isJoined,
         isHost: isHost,
@@ -567,6 +665,10 @@ function initialState(): GameState {
 
     const weatherParticles = Array.from({ length: 55 }, () => ({
       x: rand(0, WIDTH), y: rand(0, HEIGHT), size: rand(1, 3), speedY: rand(0.16, 0.5), drift: rand(-0.12, 0.12)
+    }));
+
+    const fogParticles = Array.from({ length: 12 }, () => ({
+      x: rand(0, WIDTH), y: rand(0, HEIGHT), size: rand(140, 260), speedX: rand(0.08, 0.2), opacity: rand(0.02, 0.06)
     }));
 
     function addEffect(x: number, y: number, text: string, color: string, isCrit = false) {
@@ -601,7 +703,9 @@ function initialState(): GameState {
       const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
       const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level);
       const levelName = levelData ? levelData.name : `Nível ${state.campfire.level}`;
-      if (ui.dayBadge) ui.dayBadge.textContent = `${levelName} — Dia ${state.day} (${isNight ? 'Noite' : 'Dia'})`;
+      const waveStatus = state.isWaveActive ? `Onda ${state.wave}` : 'Preparação';
+      const timerSec = Math.ceil(state.waveTimer / 60);
+      if (ui.dayBadge) ui.dayBadge.textContent = `${levelName} — Dia ${state.day} (${isNight ? 'Noite' : 'Dia'}) | ${waveStatus} (${timerSec}s)`;
       
       const mobile = isMobileLayout();
       if (ui.mobileUI) ui.mobileUI.style.display = mobile ? 'block' : 'none';
@@ -650,12 +754,8 @@ function initialState(): GameState {
           } else {
             upBtn.style.display = 'none';
           }
-        } else if (target.type === 'house') {
-          upBtn.style.display = 'none';
         } else {
-          const cost = 5 + (target.ref.level * 5);
-          upBtn.textContent = `Melhorar (${cost}G)`;
-          upBtn.style.display = 'flex';
+          upBtn.style.display = 'none';
         }
       }
 
@@ -867,50 +967,6 @@ function initialState(): GameState {
         showMessage(`Base evoluída para: ${nextLevelData.name}!`);
         return;
       }
-
-      const upgradeCost = 5 + (level * 5); // Gold cost increases per level
-
-      if (p.gold < upgradeCost) return showMessage(`Melhorar: ${upgradeCost} ouro`);
-      
-      p.gold -= upgradeCost;
-      state.cameraShake = 6;
-      target.ref.level = level + 1;
-      target.ref.maxHp += 50;
-      target.ref.hp = target.ref.maxHp;
-
-      if (target.type === 'tower') {
-        target.ref.damage += 5;
-        target.ref.range += 10;
-        addEffect(target.ref.x, target.ref.y - 24, '+5 Dano!', '#ffd700');
-      } else if (target.type === 'helper') {
-        const h = target.ref;
-        h.damage += 4;
-        h.range += 10;
-        h.maxHp += 40;
-        h.hp = h.maxHp;
-        
-        let abilityMsg = 'Soldado Melhorado!';
-        if (h.level === 2) {
-          abilityMsg = 'Nível 2: +Vida & +Dano';
-        } else if (h.level === 3) {
-          if (h.type === 'warrior') abilityMsg = 'Nível 3: Corte Dourado!';
-          if (h.type === 'archer') abilityMsg = 'Nível 3: Flecha Dupla!';
-          if (h.type === 'sniper') abilityMsg = 'Nível 3: Mira Telescópica!';
-          if (h.type === 'mage') abilityMsg = 'Nível 3: Explosão Arcana!';
-          if (h.type === 'summoner') abilityMsg = 'Nível 3: Invocação Dupla!';
-        } else if (h.level >= 4) {
-          if (h.type === 'warrior') abilityMsg = 'Nível 4: Fúria de Combate!';
-          if (h.type === 'archer') abilityMsg = 'Nível 4: Precisão Letal!';
-          if (h.type === 'sniper') abilityMsg = 'Nível 4: Tiro Penetrante!';
-          if (h.type === 'mage') abilityMsg = 'Nível 4: Congelamento!';
-          if (h.type === 'summoner') abilityMsg = 'Nível 4: Guardiões de Elite!';
-        }
-        
-        addEffect(h.x, h.y - 30, abilityMsg, '#ffd700');
-        showMessage(`${h.type.toUpperCase()}: ${abilityMsg}`);
-      } else if (target.type === 'fence') {
-        addEffect((target.ref.x1 + target.ref.x2) / 2, (target.ref.y1 + target.ref.y2) / 2 - 12, 'Cerca Reforçada!', '#ffd700');
-      }
     }
 
     function repairConstruction(target: any) {
@@ -1092,11 +1148,12 @@ function initialState(): GameState {
           const color = type === 'wood' ? '#8c5a39' : type === 'stone' ? '#808074' : type === 'fiber' ? '#79a950' : '#ffd700';
           addParticles(res.x, res.y, color, 8);
           res.respawning = true;
-          if (type === 'wood') state.player.wood += 1;
-          if (type === 'stone') state.player.stone += 1;
-          if (type === 'fiber') state.player.fiber += 1;
-          if (type === 'gold') state.player.gold += 1;
-          addEffect(res.x, res.y - 16, `+1 ${type === 'wood' ? 'madeira' : type === 'stone' ? 'pedra' : type === 'fiber' ? 'fibra' : 'ouro'}`, '#e4d0a4');
+          const amount = 3; // Increased resource abundance
+          if (type === 'wood') state.player.wood += amount;
+          if (type === 'stone') state.player.stone += amount;
+          if (type === 'fiber') state.player.fiber += amount;
+          if (type === 'gold') state.player.gold += amount;
+          addEffect(res.x, res.y - 16, `+${amount} ${type === 'wood' ? 'madeira' : type === 'stone' ? 'pedra' : type === 'fiber' ? 'fibra' : 'ouro'}`, '#e4d0a4');
           res.x = -9999;
           res.y = -9999;
           setTimeout(() => {
@@ -1191,26 +1248,35 @@ function initialState(): GameState {
     (window as any).closeUpgradePanel = () => { if (ui.upgradePanel) ui.upgradePanel.style.display = 'none'; };
 
     function spawnEnemy() {
+      if (!state.isWaveActive) return; // Only spawn during wave combat phase
       state.spawnTimer = Math.max(0, state.spawnTimer - 1);
       if (state.spawnTimer > 0) return;
 
       const minutes = state.timeElapsed / 60;
+      const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
+      
       let spawnCount = 1;
       let spawnInterval = 300; // 5s
       let possibleTypes = ['normal'];
 
+      const nightMult = isNight ? 1.4 : 1.0;
+
       if (minutes >= 10) {
-        spawnCount = 8;
+        spawnCount = Math.floor(8 * nightMult);
         spawnInterval = 120; // 2s
         possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer', 'shaman', 'boss'];
       } else if (minutes >= 5) {
-        spawnCount = 6;
+        spawnCount = Math.floor(6 * nightMult);
         spawnInterval = 150; // 2.5s
         possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer', 'shaman'];
       } else if (minutes >= 2) {
-        spawnCount = 5;
+        spawnCount = Math.floor(5 * nightMult);
         spawnInterval = 180; // 3s
         possibleTypes = ['normal', 'green', 'skeleton', 'archer'];
+      }
+      
+      if (isNight && !possibleTypes.includes('skeleton')) {
+        possibleTypes.push('skeleton');
       }
 
       state.spawnTimer = spawnInterval;
@@ -1993,6 +2059,23 @@ function initialState(): GameState {
     function updateGame() {
       state.frame++;
       if (state.status !== 'playing') return;
+
+      // Wave Timer Logic
+      state.waveTimer = Math.max(0, state.waveTimer - 1);
+      if (state.waveTimer <= 0) {
+        if (state.isWaveActive) {
+          // Combat ended, start preparation
+          state.isWaveActive = false;
+          state.waveTimer = 15 * 60; // 15 seconds prep
+          showQuestMessage('Onda finalizada! Prepare-se para a próxima.', 3000);
+        } else {
+          // Preparation ended, start combat
+          state.isWaveActive = true;
+          state.waveTimer = 60 * 60; // 60 seconds combat
+          state.wave += 1;
+          showQuestMessage(`Onda ${state.wave} iniciada!`, 3000);
+        }
+      }
 
       state.timeElapsed += 1/60;
       state.player.slowed = Math.max(0, state.player.slowed - 1);
@@ -3364,10 +3447,53 @@ function initialState(): GameState {
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
     }
 
+    function drawFog() {
+      const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
+      if (!isNight) return;
+      
+      ctx.save();
+      for (const f of fogParticles) {
+        f.x += f.speedX;
+        if (f.x > WIDTH + f.size) f.x = -f.size;
+        
+        const grad = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.size);
+        grad.addColorStop(0, `rgba(180, 200, 220, ${f.opacity})`);
+        grad.addColorStop(1, 'rgba(180, 200, 220, 0)');
+        
+        ctx.fillStyle = grad;
+        ctx.fillRect(f.x - f.size, f.y - f.size, f.size * 2, f.size * 2);
+      }
+      ctx.restore();
+    }
+
     function drawDayNight() {
       const t = Math.sin(state.timeOfDay * Math.PI * 2 - Math.PI / 2) * 0.5 + 0.5;
+      
+      // Base darkness
       ctx.fillStyle = `rgba(12, 22, 28, ${t * 0.5})`;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      
+      // Moonlight/Campfire light during night
+      if (t > 0.15) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        
+        // Light around campfire
+        const campLight = ctx.createRadialGradient(state.campfire.x, state.campfire.y, 20, state.campfire.x, state.campfire.y, 180);
+        campLight.addColorStop(0, `rgba(255, 200, 100, ${t * 0.7})`);
+        campLight.addColorStop(1, 'rgba(255, 200, 100, 0)');
+        ctx.fillStyle = campLight;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        
+        // Light around player
+        const playerLight = ctx.createRadialGradient(state.player.x, state.player.y, 10, state.player.x, state.player.y, 120);
+        playerLight.addColorStop(0, `rgba(255, 255, 255, ${t * 0.4})`);
+        playerLight.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = playerLight;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        
+        ctx.restore();
+      }
     }
 
     function render() {
@@ -3379,6 +3505,7 @@ function initialState(): GameState {
 
       drawGround();
       drawAmbientParticles();
+      drawFog();
 
       // Collect all objects for depth sorting
       const objects: any[] = [
