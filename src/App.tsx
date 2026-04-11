@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { Heart, Coins, Trees, Gem, Hammer, Shield, Users, X, ArrowUpCircle, Wrench, Play, Plus, LogIn, Globe, PawPrint } from 'lucide-react';
-import { io, Socket } from 'socket.io-client';
+import { Heart, Coins, Trees, Gem, Hammer, Shield, Users, X, ArrowUpCircle, Wrench, Play, Plus, LogIn, Globe, PawPrint, Trophy, Sword, Pickaxe } from 'lucide-react';
 
 const DIALOGUES = {
   ENEMY_SIGHTED: ["Inimigos à vista!", "Defendam a base!", "Alerta!", "Invasores!"],
@@ -13,17 +12,9 @@ const DIALOGUES = {
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(null);
-  const socketRef = useRef<Socket | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
-  const [roomId, setRoomId] = useState('');
-  const [isJoined, setIsJoined] = useState(false);
-  const [isHost, setIsHost] = useState(false);
-  const [remotePlayers, setRemotePlayers] = useState<Record<string, any>>({});
-  const [roomsList, setRoomsList] = useState<{ id: string; playerCount: number }[]>([]);
-  const [isConnected, setIsConnected] = useState(false);
   const stateRef = useRef<any>({
-    remotePlayers: {},
     particles: [],
     enemies: [],
     drops: [],
@@ -33,44 +24,32 @@ export default function App() {
       fenceSegments: [],
       towers: [],
       helpers: [],
-      dogs: []
+      wolves: [],
+      falcons: []
     },
     projectiles: [],
     summons: [],
     effects: [],
     timeOfDay: 0.42,
     day: 1,
-    isJoined: false,
-    isHost: false,
-    roomId: '',
     frame: 0,
     spawnTimer: 0,
     timeElapsed: 0,
     status: 'playing',
     player: {
-      x: 430, y: 320,
+      x: 700, y: 550,
       health: 100, maxHealth: 100,
       gold: 50, wood: 20, stone: 10, fiber: 5,
       speed: 2.2, damage: 12,
       attackCooldown: 30, attackTimer: 0,
       facing: 'right', frame: 0,
       hitFlash: 0, slowed: 0,
-      idleAttackTimer: 0
+      idleAttackTimer: 0,
+      damageMult: 1.0, healthMult: 1.0, resourceMult: 1.0
     },
-    campfire: { x: 430, y: 320, hp: 100, maxHp: 100, level: 1, radius: 20 },
+    campfire: { x: 700, y: 550, hp: 100, maxHp: 100, level: 1, radius: 20 },
     pulse: 0
   });
-
-  useEffect(() => {
-    if (gameStarted && !isJoined && isConnected) {
-      console.log('Requesting rooms list...');
-      socketRef.current?.emit('request-rooms');
-      const interval = setInterval(() => {
-        socketRef.current?.emit('request-rooms');
-      }, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [gameStarted, isJoined, isConnected]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -82,157 +61,57 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const socket = io({
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-    });
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      console.log('Connected to server:', socket.id);
-      setIsConnected(true);
-      // If we were already in a room, re-join it on reconnection
-      const currentRoomId = stateRef.current?.roomId;
-      if (currentRoomId && stateRef.current?.isJoined) {
-        socket.emit('join-room', currentRoomId);
-      }
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('Connection error:', err);
-      setIsConnected(false);
-    });
-
-    socket.on('rooms-list', (list) => {
-      console.log('Received rooms list:', list);
-      setRoomsList(list);
-    });
-
-    socket.on('room-joined', (data) => {
-      console.log('Successfully joined room:', data);
-      setIsHost(data.isHost);
-      setIsJoined(true);
-      if (stateRef.current) {
-        stateRef.current.isHost = data.isHost;
-        stateRef.current.roomId = data.roomId;
-        stateRef.current.isJoined = true;
-        // If we are joining an existing room as a client, clear local state
-        // to ensure we only see what the host syncs.
-        if (!data.isHost) {
-          stateRef.current.enemies = [];
-          stateRef.current.drops = [];
-          stateRef.current.constructions = {
-            fenceBuilt: false,
-            fenceSegments: [],
-            towers: [],
-            helpers: [],
-            dogs: []
-          };
-        }
-      }
-    });
-
-    socket.on('player-joined', (id) => {
-      console.log('Player joined:', id);
-      if (stateRef.current) {
-        stateRef.current.remotePlayers[id] = { x: 430, y: 320, health: 100, maxHealth: 100 };
-        setRemotePlayers({ ...stateRef.current.remotePlayers });
-      }
-    });
-
-    socket.on('player-moved', (data) => {
-      const { id, ...playerData } = data;
-      if (stateRef.current) {
-        stateRef.current.remotePlayers[id] = { ...stateRef.current.remotePlayers[id], ...playerData };
-        setRemotePlayers({ ...stateRef.current.remotePlayers });
-      }
-    });
-
-    socket.on('remote-attack', (data) => {
-      const { id, x, y, ang } = data;
-      if (stateRef.current) {
-        stateRef.current.particles.push({
-          x: x + Math.cos(ang) * 20,
-          y: y + Math.sin(ang) * 20,
-          vx: 0, vy: 0,
-          life: 0.2,
-          size: 25,
-          color: 'rgba(255, 255, 255, 0.4)',
-          type: 'slash'
-        });
-
-        if (stateRef.current.isHost) {
-          const range = 65;
-          for (const enemy of stateRef.current.enemies) {
-            const d = Math.hypot(x - enemy.x, y - enemy.y);
-            if (d < range) {
-              const angToEnemy = Math.atan2(enemy.y - y, enemy.x - x);
-              let diff = Math.abs(angToEnemy - ang);
-              if (diff > Math.PI) diff = Math.PI * 2 - diff;
-              if (diff < 1.1) {
-                const dmg = Math.random() < 0.15 ? 24 : 12;
-                enemy.hp -= dmg;
-                enemy.hitFlash = 5;
-                const kx = enemy.x - x;
-                const ky = enemy.y - y;
-                const kd = Math.hypot(kx, ky) || 1;
-                enemy.vx = (kx / kd) * 9;
-                enemy.vy = (ky / kd) * 9;
-              }
-            }
-          }
-        }
-      }
-    });
-
-    socket.on('game-state-synced', (gameState) => {
-      if (stateRef.current && !stateRef.current.isHost) {
-        stateRef.current.enemies = gameState.enemies || [];
-        stateRef.current.drops = gameState.drops || [];
-        stateRef.current.resources = gameState.resources || [];
-        stateRef.current.constructions = {
-          ...(gameState.constructions || {}),
-          dogs: gameState.constructions?.dogs || [],
-          helpers: gameState.constructions?.helpers || [],
-          towers: gameState.constructions?.towers || [],
-          fenceSegments: gameState.constructions?.fenceSegments || []
-        };
-        stateRef.current.projectiles = gameState.projectiles || [];
-        stateRef.current.timeOfDay = gameState.timeOfDay;
-        stateRef.current.day = gameState.day;
-      }
-    });
-
-    socket.on('became-host', () => {
-      setIsHost(true);
-      if (stateRef.current) stateRef.current.isHost = true;
-      console.log('You are now the host');
-    });
-
-    socket.on('player-left', (id) => {
-      if (stateRef.current) {
-        delete stateRef.current.remotePlayers[id];
-        setRemotePlayers({ ...stateRef.current.remotePlayers });
-      }
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('Disconnected from server:', reason);
-      setIsConnected(false);
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!gameStarted || !isJoined) return;
+    if (!gameStarted) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const MAP_WIDTH = 1400;
+    const MAP_HEIGHT = 1100;
+
+    // Spatial Grid Optimization (O(N) instead of O(N^2))
+    // This divides the map into regions to check only nearby entities
+    const GRID_CELL_SIZE = 120;
+    const gridCols = Math.ceil(MAP_WIDTH / GRID_CELL_SIZE);
+    const gridRows = Math.ceil(MAP_HEIGHT / GRID_CELL_SIZE);
+    const spatialGrid: any[][] = Array.from({ length: gridCols * gridRows }, () => []);
+
+    function updateSpatialGrid() {
+      // Clear grid efficiently
+      for (let i = 0; i < spatialGrid.length; i++) {
+        spatialGrid[i].length = 0;
+      }
+      
+      // Add all active enemies to their respective grid cells
+      for (const enemy of state.enemies) {
+        if (enemy.dying !== undefined) continue; // Skip dying enemies
+        const col = Math.floor(enemy.x / GRID_CELL_SIZE);
+        const row = Math.floor(enemy.y / GRID_CELL_SIZE);
+        if (col >= 0 && col < gridCols && row >= 0 && row < gridRows) {
+          spatialGrid[row * gridCols + col].push(enemy);
+        }
+      }
+    }
+
+    // Returns a list of enemies within the grid cells covered by the radius
+    function getNearbyEnemies(x: number, y: number, radius: number) {
+      const minCol = Math.max(0, Math.floor((x - radius) / GRID_CELL_SIZE));
+      const maxCol = Math.min(gridCols - 1, Math.floor((x + radius) / GRID_CELL_SIZE));
+      const minRow = Math.max(0, Math.floor((y - radius) / GRID_CELL_SIZE));
+      const maxRow = Math.min(gridRows - 1, Math.floor((y + radius) / GRID_CELL_SIZE));
+      
+      const nearby = [];
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          const cell = spatialGrid[r * gridCols + c];
+          for (let i = 0; i < cell.length; i++) {
+            nearby.push(cell[i]);
+          }
+        }
+      }
+      return nearby;
+    }
 
     // Adjust canvas dimensions for mobile
     const isMobileNow = window.innerWidth < 1024;
@@ -247,40 +126,14 @@ export default function App() {
     const WIDTH = canvas.width;
     const HEIGHT = canvas.height;
 
-    const ui = {
-      healthText: document.getElementById('healthText'),
-      healthFill: document.getElementById('healthFill'),
-      woodCount: document.getElementById('woodCount'),
-      stoneCount: document.getElementById('stoneCount'),
-      fiberCount: document.getElementById('fiberCount'),
-      goldCount: document.getElementById('goldCount'),
-      dayBadge: document.getElementById('dayBadge'),
-      messageBox: document.getElementById('messageBox'),
-      titleOverlay: document.getElementById('titleOverlay'),
-      gameOverOverlay: document.getElementById('gameOverOverlay'),
-      daysSurvived: document.getElementById('daysSurvived'),
-      finalGold: document.getElementById('finalGold'),
-      upgradePanel: document.getElementById('upgradePanel'),
-      panelTitle: document.getElementById('panelTitle'),
-      panelDesc: document.getElementById('panelDesc'),
-      upgradeBtn: document.getElementById('upgradeBtn'),
-      repairBtn: document.getElementById('repairBtn'),
-      closePanelBtn: document.getElementById('closePanelBtn'),
-      mobileUI: document.querySelector('.mobile-controls') as HTMLElement,
-      joystickBase: document.getElementById('joystickBase'),
-      joystickStick: document.getElementById('joystickStick'),
-      questMessage: document.getElementById('questMessage'),
-    };
-
-    const keys: Record<string, boolean> = {};
-    const pointer = { x: 0, y: 0 };
-    const joystick = { active: false, dx: 0, dy: 0 };
-    let mobileMovement = { x: 0, y: 0 };
-    let joystickActive = false;
-    let joystickStart = { x: 0, y: 0 };
-    let selectedConstruction: any = null;
     let messageTimer: any = null;
+    let questMessageTimer: any = null;
     let forceMobile = false;
+    
+    // Internal systems for Intensity & Balance
+    let eventCooldown = 0;
+    let activeHunters = 0;
+    let activeInfiltrators = 0;
 
     const DAY_SPEED = 0.00028;
     const AUTO_COLLECT_RADIUS = 34;
@@ -297,7 +150,144 @@ export default function App() {
       if (!ui.questMessage) return;
       ui.questMessage.textContent = text;
       ui.questMessage.style.display = 'block';
-      setTimeout(() => { if (ui.questMessage) ui.questMessage.style.display = 'none'; }, duration);
+      clearTimeout(questMessageTimer);
+      questMessageTimer = setTimeout(() => { if (ui.questMessage) ui.questMessage.style.display = 'none'; }, duration);
+    }
+
+    // --- Milestone & Boss Systems ---
+    
+    function spawnBoss(wave: number) {
+      const isMilestone = wave % 10 === 0;
+      // Controlled boss scaling
+      const hpMult = 1 + (wave - 1) * 0.2;
+      const dmgMult = 1 + (wave - 1) * 0.15;
+      
+      const baseHp = (500 + wave * 120) * hpMult;
+      const damage = 0.75 * dmgMult;
+      const size = isMilestone ? 4.2 : 3.0;
+      const color = isMilestone ? '#ff00ff' : '#ffd700'; // Magenta for milestones, Gold for bosses
+      
+      // Spawn from a random side
+      const side = Math.floor(Math.random() * 4);
+      let x = 0, y = 0;
+      if (side === 0) { x = MAP_WIDTH / 2; y = -100; }
+      else if (side === 1) { x = MAP_WIDTH + 100; y = MAP_HEIGHT / 2; }
+      else if (side === 2) { x = MAP_WIDTH / 2; y = MAP_HEIGHT + 100; }
+      else if (side === 3) { x = -100; y = MAP_HEIGHT / 2; }
+
+      state.enemies.push({
+        x, y,
+        vx: 0, vy: 0,
+        hp: baseHp, maxHp: baseHp,
+        speed: 0.35, damage,
+        cooldown: 0, hitFlash: 0,
+        type: 'boss', size, color, focusFences: true,
+        behavior: 0,
+        strategyOffset: { x: 0, y: 0 },
+        stuckTimer: 0,
+        isMilestone
+      });
+      
+      const msg = isMilestone ? "O GRANDE GUARDIÃO SURGIU!" : "O CHEFE DA HORDA CHEGOU!";
+      showQuestMessage(msg, 4500);
+      triggerShake(25);
+    }
+
+    function giveWaveRewards(wave: number) {
+      const isBossWave = wave % 5 === 0;
+      const isMilestone = wave % 10 === 0;
+      
+      if (isBossWave) {
+        // Balanced resource bonuses
+        const goldBonus = 40 + wave * 10;
+        const woodBonus = 20 + wave * 6;
+        const stoneBonus = 10 + wave * 3;
+        
+        state.player.gold += goldBonus;
+        state.player.wood += woodBonus;
+        state.player.stone += stoneBonus;
+        
+        // Balanced healing
+        state.player.health = Math.min(state.player.maxHealth, state.player.health + 20);
+        state.campfire.hp = Math.min(state.campfire.maxHp, state.campfire.hp + 15);
+        
+        const msg = isMilestone ? `MARCO CONCLUÍDO! +${goldBonus} Ouro, +${woodBonus} Madeira` : `VITÓRIA! +${goldBonus} Ouro, +${woodBonus} Madeira`;
+        showQuestMessage(msg, 4500);
+        
+        // Visual feedback
+        for (let i = 0; i < 15; i++) {
+          state.particles.push({
+            x: state.player.x, y: state.player.y,
+            vx: (Math.random() - 0.5) * 8, vy: (Math.random() - 0.8) * 10,
+            life: 1.0, size: rand(3, 6), color: '#ffd700'
+          });
+        }
+        addEffect(state.player.x, state.player.y - 50, 'RECOMPENSA DE BOSS!', '#ffd700', true);
+
+        // Trigger Reward Choice UI
+        setTimeout(() => {
+          if (ui.rewardOverlay) {
+            ui.rewardOverlay.style.display = 'flex';
+            state.status = 'paused';
+          }
+        }, 2000);
+      }
+    }
+
+    function handleReward(type: 'atk' | 'def' | 'eco') {
+      // Diminishing returns formula: increment = base / multiplier
+      // This ensures that as you get stronger, further upgrades are less explosive
+      
+      if (type === 'atk') {
+        const currentMult = state.player.damageMult || 1.0;
+        const increment = 0.25 / currentMult; 
+        state.player.damageMult = currentMult + increment;
+        state.player.damage = Math.round(12 * state.player.damageMult);
+        
+        // Trade-off: Focus on power reduces max health slightly
+        state.player.healthMult = Math.max(0.8, (state.player.healthMult || 1.0) - 0.05);
+        state.player.maxHealth = Math.round(100 * state.player.healthMult);
+        state.player.health = Math.min(state.player.health, state.player.maxHealth);
+        
+        addEffect(state.player.x, state.player.y - 40, 'DANO++, VIDA-', '#ff5252', true);
+      } else if (type === 'def') {
+        const currentMult = state.player.healthMult || 1.0;
+        const increment = 0.25 / currentMult;
+        state.player.healthMult = currentMult + increment;
+        const oldMax = state.player.maxHealth;
+        state.player.maxHealth = Math.round(100 * state.player.healthMult);
+        state.player.health += (state.player.maxHealth - oldMax);
+        
+        // Trade-off: Focus on defense reduces damage slightly
+        state.player.damageMult = Math.max(0.8, (state.player.damageMult || 1.0) - 0.05);
+        state.player.damage = Math.round(12 * state.player.damageMult);
+        
+        addEffect(state.player.x, state.player.y - 40, 'VIDA++, DANO-', '#2196f3', true);
+      } else if (type === 'eco') {
+        const currentMult = state.player.resourceMult || 1.0;
+        const increment = 0.25 / currentMult;
+        state.player.resourceMult = currentMult + increment;
+        
+        // Trade-off: Focus on economy reduces max health slightly
+        state.player.healthMult = Math.max(0.8, (state.player.healthMult || 1.0) - 0.05);
+        state.player.maxHealth = Math.round(100 * state.player.healthMult);
+        state.player.health = Math.min(state.player.health, state.player.maxHealth);
+        
+        addEffect(state.player.x, state.player.y - 40, 'COLETA++, VIDA-', '#4caf50', true);
+      }
+      
+      if (ui.rewardOverlay) ui.rewardOverlay.style.display = 'none';
+      state.status = 'playing';
+      triggerShake(10);
+      
+      // Level up effect
+      for (let i = 0; i < 20; i++) {
+        state.particles.push({
+          x: state.player.x, y: state.player.y,
+          vx: (Math.random() - 0.5) * 10, vy: (Math.random() - 0.5) * 10,
+          life: 1.2, size: rand(4, 8), color: type === 'atk' ? '#ff5252' : type === 'def' ? '#2196f3' : '#4caf50'
+        });
+      }
     }
 
     function showMessage(text: string) {
@@ -309,10 +299,9 @@ export default function App() {
     }
 
     const isInCenter = (x: number, y: number) => {
-      const clearW = WIDTH * 0.82; // Increased from 0.72
-      const clearH = HEIGHT * 0.82;
-      return x > WIDTH / 2 - clearW/2 && x < WIDTH / 2 + clearW/2 && 
-             y > HEIGHT / 2 - clearH/2 && y < HEIGHT / 2 + clearH/2;
+      const clearRadius = 380; // Área limpa ao redor da fogueira (MAP_WIDTH/2, MAP_HEIGHT/2)
+      const dist = Math.hypot(x - MAP_WIDTH / 2, y - MAP_HEIGHT / 2);
+      return dist < clearRadius;
     };
 
     const getPos = (minX: number, maxX: number, minY: number, maxY: number) => {
@@ -347,7 +336,7 @@ export default function App() {
 
     function makeResource(type: string) {
       const margin = 56;
-      const pos = getPos(margin, WIDTH - margin, margin, HEIGHT - margin);
+      const pos = getPos(margin, MAP_WIDTH - margin, margin, MAP_HEIGHT - margin);
       return { id: Math.random().toString(36).slice(2), type, x: pos.x, y: pos.y, respawning: false };
     }
 
@@ -368,6 +357,64 @@ export default function App() {
       ];
     }
 
+    let state: GameState = initialState();
+    stateRef.current = state;
+
+    // Camera state
+    const camera = {
+      x: state.player.x - WIDTH / 2,
+      y: state.player.y - HEIGHT / 2
+    };
+
+    function updateCamera() {
+      const targetX = state.player.x - WIDTH / 2;
+      const targetY = state.player.y - HEIGHT / 2;
+      
+      // Smooth follow
+      camera.x += (targetX - camera.x) * 0.1;
+      camera.y += (targetY - camera.y) * 0.1;
+      
+      // Clamp to map boundaries
+      camera.x = clamp(camera.x, 0, MAP_WIDTH - WIDTH);
+      camera.y = clamp(camera.y, 0, MAP_HEIGHT - HEIGHT);
+    }
+
+    const ui = {
+      healthText: document.getElementById('healthText'),
+      healthFill: document.getElementById('healthFill'),
+      woodCount: document.getElementById('woodCount'),
+      stoneCount: document.getElementById('stoneCount'),
+      fiberCount: document.getElementById('fiberCount'),
+      goldCount: document.getElementById('goldCount'),
+      dayBadge: document.getElementById('dayBadge'),
+      messageBox: document.getElementById('messageBox'),
+      titleOverlay: document.getElementById('titleOverlay'),
+      gameOverOverlay: document.getElementById('gameOverOverlay'),
+      daysSurvived: document.getElementById('daysSurvived'),
+      finalGold: document.getElementById('finalGold'),
+      upgradePanel: document.getElementById('upgradePanel'),
+      panelTitle: document.getElementById('panelTitle'),
+      panelDesc: document.getElementById('panelDesc'),
+      upgradeBtn: document.getElementById('upgradeBtn'),
+      repairBtn: document.getElementById('repairBtn'),
+      closePanelBtn: document.getElementById('closePanelBtn'),
+      mobileUI: document.querySelector('.mobile-controls') as HTMLElement,
+      joystickBase: document.getElementById('joystickBase'),
+      joystickStick: document.getElementById('joystickStick'),
+      questMessage: document.getElementById('questMessage'),
+      rewardOverlay: document.getElementById('rewardOverlay'),
+      rewardAtk: document.getElementById('rewardAtk'),
+      rewardDef: document.getElementById('rewardDef'),
+      rewardEco: document.getElementById('rewardEco'),
+    };
+
+    const keys: Record<string, boolean> = {};
+    const pointer = { x: 0, y: 0 };
+    const joystick = { active: false, dx: 0, dy: 0 };
+    let mobileMovement = { x: 0, y: 0 };
+    let joystickActive = false;
+    let joystickStart = { x: 0, y: 0 };
+    let selectedConstruction: any = null;
     interface GameState {
       status: string;
       day: number;
@@ -399,147 +446,198 @@ export default function App() {
       helperSlots: any[];
       projectiles: any[];
       gameOver?: boolean;
-      // Multiplayer
-      isJoined: boolean;
-      isHost: boolean;
-      roomId: string;
-      remotePlayers: Record<string, any>;
       frame: number;
     }
 
     const CAMPFIRE_LEVELS = [
-  { level: 1, name: "Acampamento Inicial", cost: { wood: 0, stone: 0, gold: 0 }, towers: 0, helpers: 0, dogs: 0, fence: false },
-  { level: 2, name: "Posto de Vigia", cost: { wood: 15, stone: 8, gold: 0 }, towers: 1, helpers: 0, dogs: 0, fence: true },
-  { level: 3, name: "Pequena Vila", cost: { wood: 30, stone: 15, gold: 5 }, towers: 2, helpers: 1, dogs: 0, fence: true },
-  { level: 4, name: "Forte de Madeira", cost: { wood: 60, stone: 35, gold: 12 }, towers: 3, helpers: 2, dogs: 1, fence: true },
-  { level: 5, name: "Cidadela", cost: { wood: 120, stone: 70, gold: 25 }, towers: 4, helpers: 4, dogs: 2, fence: true },
-  { level: 6, name: "Fortaleza Real", cost: { wood: 200, stone: 120, gold: 50 }, towers: 6, helpers: 6, dogs: 3, fence: true },
-  { level: 7, name: "Reino Próspero", cost: { wood: 400, stone: 250, gold: 100 }, towers: 8, helpers: 8, dogs: 4, fence: true },
-  { level: 8, name: "Império Eterno", cost: { wood: 800, stone: 500, gold: 250 }, towers: 10, helpers: 10, dogs: 6, fence: true },
-];
+      { level: 1, name: "Acampamento Inicial", cost: { wood: 0, stone: 0, gold: 0 }, towers: 0, helpers: 0, wolves: 0, falcons: 0, fence: false, lightRadius: 300 },
+      { level: 2, name: "Posto de Vigia", cost: { wood: 20, stone: 10, gold: 0 }, towers: 1, helpers: 0, wolves: 0, falcons: 0, fence: true, lightRadius: 350 },
+      { level: 3, name: "Pequena Vila", cost: { wood: 40, stone: 20, gold: 10 }, towers: 2, helpers: 1, wolves: 0, falcons: 0, fence: true, lightRadius: 400 },
+      { level: 4, name: "Forte de Madeira", cost: { wood: 80, stone: 45, gold: 25 }, towers: 3, helpers: 2, wolves: 1, falcons: 1, fence: true, lightRadius: 450 },
+      { level: 5, name: "Cidadela", cost: { wood: 160, stone: 90, gold: 50 }, towers: 4, helpers: 4, wolves: 2, falcons: 1, fence: true, lightRadius: 500 },
+      { level: 6, name: "Fortaleza Real", cost: { wood: 300, stone: 180, gold: 100 }, towers: 5, helpers: 6, wolves: 3, falcons: 2, fence: true, lightRadius: 550 },
+      { level: 7, name: "Reino Próspero", cost: { wood: 600, stone: 400, gold: 250 }, towers: 6, helpers: 8, wolves: 4, falcons: 3, fence: true, lightRadius: 600 },
+      { level: 8, name: "Império Eterno", cost: { wood: 1200, stone: 800, gold: 500 }, towers: 8, helpers: 10, wolves: 6, falcons: 4, fence: true, lightRadius: 700 },
+    ];
 
-function syncBaseDefenses(state: any) {
-  const cfLevel = state.campfire.level;
-  const levelData = CAMPFIRE_LEVELS.find(l => l.level === cfLevel);
-  if (!levelData) return;
+    /**
+     * Sincroniza as defesas da base com o nível atual da fogueira.
+     * Garante que as estruturas surjam automaticamente e sejam melhoradas.
+     */
+    function syncBaseDefenses(state: any) {
+      const cfLevel = state.campfire.level;
+      const levelData = CAMPFIRE_LEVELS.find(l => l.level === cfLevel);
+      if (!levelData) return;
 
-  // 1. Sync & Upgrade Fence
-  if (levelData.fence && !state.constructions.fenceBuilt) {
-    state.constructions.fenceBuilt = true;
-    state.constructions.fenceSegments = createFenceSegments(state.campfire);
-  }
-  if (state.constructions.fenceBuilt) {
-    state.constructions.fenceSegments.forEach((seg: any) => {
-      if (seg.level < cfLevel) {
-        const diff = cfLevel - seg.level;
-        seg.level = cfLevel;
-        seg.maxHp += 80 * diff;
-        seg.hp = seg.maxHp;
+      // Campfire Evolution: Impactful changes
+      state.campfire.maxHp = 100 + (cfLevel - 1) * 50;
+      state.campfire.hp = Math.min(state.campfire.maxHp, state.campfire.hp + 20);
+      
+      // Visual feedback for upgrade
+      addPulse(state.campfire.x, state.campfire.y, '#ffd700');
+      triggerShake(8);
+      addEffect(state.campfire.x, state.campfire.y - 60, `CAMPFIRE NÍVEL ${cfLevel}!`, '#ffd700', true);
+      
+      // Boost existing defenses based on level (with soft caps)
+      for (const t of state.constructions.towers) {
+        t.damage = Math.min(45, 15 + cfLevel * 2.5);
+        t.fireRate = Math.max(25, 60 - cfLevel * 4);
       }
-    });
-  }
-
-  // 2. Sync & Upgrade Towers
-  state.constructions.towers.forEach((t: any) => {
-    if (t.level < cfLevel) {
-      const diff = cfLevel - t.level;
-      t.level = cfLevel;
-      t.damage += 5 * diff;
-      t.range += 10 * diff;
-      t.maxHp += 50 * diff;
-      t.hp = t.maxHp;
-    }
-  });
-  while (state.constructions.towers.length < levelData.towers) {
-    const slot = state.towerSlots.find(s => !s.used);
-    if (slot) {
-      slot.used = true;
-      const t = { x: slot.x, y: slot.y, level: 1, hp: 100, maxHp: 100, damage: 10, range: 130, cooldown: 0 };
-      if (cfLevel > 1) {
-        const diff = cfLevel - 1;
-        t.level = cfLevel;
-        t.damage += 5 * diff;
-        t.range += 10 * diff;
-        t.maxHp += 50 * diff;
-        t.hp = t.maxHp;
+      for (const h of state.constructions.helpers) {
+        h.damage = Math.min(25, 8 + cfLevel * 1.5);
       }
-      state.constructions.towers.push(t);
-    } else break;
-  }
 
-  // 3. Sync & Upgrade Dogs
-  state.constructions.dogs.forEach((d: any) => {
-    if (d.level < cfLevel) {
-      const diff = cfLevel - d.level;
-      d.level = cfLevel;
-      d.damage += 10 * diff;
-      d.maxHp += 40 * diff;
-      d.hp = d.maxHp;
-    }
-  });
-  while (state.constructions.dogs.length < levelData.dogs) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 60;
-    const dx = state.campfire.x + Math.cos(angle) * dist;
-    const dy = state.campfire.y + Math.sin(angle) * dist;
-    const d = {
-      x: dx, y: dy, homeX: dx, homeY: dy,
-      level: 1, hp: 80, maxHp: 80, damage: 20, speed: 4.5,
-      cooldown: 0, facing: 'right', walkTimer: 0
-    };
-    if (cfLevel > 1) {
-      const diff = cfLevel - 1;
-      d.level = cfLevel;
-      d.damage += 10 * diff;
-      d.maxHp += 40 * diff;
-      d.hp = d.maxHp;
-    }
-    state.constructions.dogs.push(d);
-  }
-
-  // 4. Sync & Upgrade Helpers
-  state.constructions.helpers.forEach((h: any) => {
-    if (h.level < cfLevel) {
-      const diff = cfLevel - h.level;
-      h.level = cfLevel;
-      h.damage += 4 * diff;
-      h.range += 10 * diff;
-      h.maxHp += 40 * diff;
-      h.hp = h.maxHp;
-    }
-  });
-  while (state.constructions.helpers.length < levelData.helpers) {
-    const slot = state.helperSlots.find(s => !s.used);
-    if (slot) {
-      slot.used = true;
-      const types = ['warrior', 'archer', 'mage', 'sniper', 'summoner'];
-      const hType = types[state.constructions.helpers.length % types.length];
-      const h: any = {
-        x: slot.x, y: slot.y, homeX: slot.x, homeY: slot.y,
-        level: 1, type: hType, hp: 100, maxHp: 100,
-        damage: 8, range: 120, cooldown: 0, summonTimer: 0,
-        state: 'idle', target: null as any, attackCooldown: 0,
-        speechCooldown: rand(100, 300), speechText: '', speechTimer: 0
-      };
-      if (hType === 'warrior') { h.hp = 180; h.maxHp = 180; h.damage = 16; h.range = 130; }
-      if (hType === 'sniper') { h.hp = 80; h.maxHp = 80; h.damage = 32; h.range = 260; h.cooldown = 100; }
-      if (hType === 'mage') { h.hp = 90; h.maxHp = 90; h.damage = 12; h.range = 180; h.cooldown = 60; }
-      if (hType === 'summoner') { h.hp = 100; h.maxHp = 100; h.damage = 0; h.range = 200; h.cooldown = 180; }
-      if (cfLevel > 1) {
-        const diff = cfLevel - 1;
-        h.level = cfLevel;
-        h.damage += 4 * diff;
-        h.range += 10 * diff;
-        h.maxHp += 40 * diff;
-        h.hp = h.maxHp;
+      // 1. Sincronizar e Melhorar Cerca
+      if (levelData.fence && !state.constructions.fenceBuilt) {
+        state.constructions.fenceBuilt = true;
+        state.constructions.fenceSegments = createFenceSegments(state.campfire);
       }
-      state.constructions.helpers.push(h);
-    } else break;
-  }
-}
+      if (state.constructions.fenceBuilt) {
+        state.constructions.fenceSegments.forEach((seg: any) => {
+          if (seg.level < cfLevel) {
+            const diff = cfLevel - seg.level;
+            seg.level = cfLevel;
+            seg.maxHp += 100 * diff;
+            seg.hp = seg.maxHp;
+          }
+        });
+      }
+
+      // 2. Sincronizar e Melhorar Torres
+      state.constructions.towers.forEach((t: any) => {
+        if (t.level < cfLevel) {
+          const diff = cfLevel - t.level;
+          t.level = cfLevel;
+          t.damage += 6 * diff;
+          t.range += 15 * diff;
+          t.maxHp += 60 * diff;
+          t.hp = t.maxHp;
+        }
+      });
+      while (state.constructions.towers.length < levelData.towers) {
+        const slot = state.towerSlots.find(s => !s.used);
+        if (slot) {
+          slot.used = true;
+          const t = { x: slot.x, y: slot.y, level: 1, hp: 120, maxHp: 120, damage: 12, range: 140, cooldown: 0 };
+          // Se a fogueira já estiver em nível alto, a torre nasce forte
+          if (cfLevel > 1) {
+            const diff = cfLevel - 1;
+            t.level = cfLevel;
+            t.damage += 6 * diff;
+            t.range += 15 * diff;
+            t.maxHp += 60 * diff;
+            t.hp = t.maxHp;
+          }
+          state.constructions.towers.push(t);
+        } else break;
+      }
+
+      // 3. Sincronizar e Melhorar Lobos (Guardas)
+      state.constructions.wolves.forEach((w: any) => {
+        if (w.level < cfLevel) {
+          const diff = cfLevel - w.level;
+          w.level = cfLevel;
+          w.damage += 15 * diff;
+          w.maxHp += 60 * diff;
+          w.hp = w.maxHp;
+        }
+      });
+      while (state.constructions.wolves.length < levelData.wolves) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 80;
+        const dx = state.campfire.x + Math.cos(angle) * dist;
+        const dy = state.campfire.y + Math.sin(angle) * dist;
+        const w = {
+          x: dx, y: dy, homeX: dx, homeY: dy,
+          level: 1, hp: 120, maxHp: 120, damage: 30, speed: 5.0,
+          cooldown: 0, facing: 'right', walkTimer: 0,
+          isSitting: false, howlTimer: 0
+        };
+        if (cfLevel > 1) {
+          const diff = cfLevel - 1;
+          w.level = cfLevel;
+          w.damage += 15 * diff;
+          w.maxHp += 60 * diff;
+          w.hp = w.maxHp;
+        }
+        state.constructions.wolves.push(w);
+      }
+
+      // 4. Sincronizar e Melhorar Falcões (Vigilantes)
+      state.constructions.falcons.forEach((f: any) => {
+        if (f.level < cfLevel) {
+          const diff = cfLevel - f.level;
+          f.level = cfLevel;
+          f.damage += 10 * diff;
+          f.maxHp += 40 * diff;
+          f.hp = f.maxHp;
+        }
+      });
+      while (state.constructions.falcons.length < levelData.falcons) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 100;
+        const dx = state.campfire.x + Math.cos(angle) * dist;
+        const dy = state.campfire.y + Math.sin(angle) * dist;
+        const f = {
+          x: dx, y: dy, homeX: dx, homeY: dy,
+          level: 1, hp: 80, maxHp: 80, damage: 20, speed: 6.5,
+          cooldown: 0, facing: 'right', flapTimer: 0,
+          altitude: 45, target: null
+        };
+        if (cfLevel > 1) {
+          const diff = cfLevel - 1;
+          f.level = cfLevel;
+          f.damage += 10 * diff;
+          f.maxHp += 40 * diff;
+          f.hp = f.maxHp;
+        }
+        state.constructions.falcons.push(f);
+      }
+
+      // 5. Sincronizar e Melhorar Soldados (Aliados)
+      state.constructions.helpers.forEach((h: any) => {
+        if (h.level < cfLevel) {
+          const diff = cfLevel - h.level;
+          h.level = cfLevel;
+          h.damage += 5 * diff;
+          h.range += 12 * diff;
+          h.maxHp += 50 * diff;
+          h.hp = h.maxHp;
+        }
+      });
+      while (state.constructions.helpers.length < levelData.helpers) {
+        const slot = state.helperSlots.find(s => !s.used);
+        if (slot) {
+          slot.used = true;
+          const types = ['warrior', 'archer', 'mage', 'sniper', 'summoner'];
+          const hType = types[state.constructions.helpers.length % types.length];
+          const h: any = {
+            x: slot.x, y: slot.y, homeX: slot.x, homeY: slot.y,
+            level: 1, type: hType, hp: 120, maxHp: 120,
+            damage: 10, range: 130, cooldown: 0, summonTimer: 0,
+            state: 'idle', target: null as any, attackCooldown: 0,
+            speechCooldown: rand(100, 300), speechText: '', speechTimer: 0
+          };
+          if (hType === 'warrior') { h.hp = 200; h.maxHp = 200; h.damage = 20; h.range = 140; }
+          if (hType === 'sniper') { h.hp = 100; h.maxHp = 100; h.damage = 40; h.range = 280; h.cooldown = 100; }
+          if (hType === 'mage') { h.hp = 110; h.maxHp = 110; h.damage = 15; h.range = 200; h.cooldown = 60; }
+          if (hType === 'summoner') { h.hp = 120; h.maxHp = 120; h.damage = 0; h.range = 220; h.cooldown = 180; }
+          
+          if (cfLevel > 1) {
+            const diff = cfLevel - 1;
+            h.level = cfLevel;
+            h.damage += 5 * diff;
+            h.range += 12 * diff;
+            h.maxHp += 50 * diff;
+            h.hp = h.maxHp;
+          }
+          state.constructions.helpers.push(h);
+        } else break;
+      }
+    }
 
 function initialState(): GameState {
-      const campfire = { x: WIDTH / 2, y: HEIGHT / 2, hp: 100, maxHp: 100, level: 1, radius: 122 };
+      const campfire = { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2, hp: 100, maxHp: 100, level: 1, radius: 122 };
       return {
         status: gameStarted ? 'playing' : 'title',
         day: 1,
@@ -551,27 +649,30 @@ function initialState(): GameState {
         effects: [] as any[],
         particles: [] as any[],
         drops: [] as any[],
-        ambientParticles: Array.from({ length: 25 }, () => ({
-          x: rand(0, WIDTH),
-          y: rand(0, HEIGHT),
+        ambientParticles: Array.from({ length: 40 }, () => ({
+          x: rand(0, MAP_WIDTH),
+          y: rand(0, MAP_HEIGHT),
           vx: rand(0.2, 0.8),
           vy: rand(0.1, 0.4),
           size: rand(2, 4),
           color: Math.random() > 0.5 ? '#79a950' : '#4e7a33', // Leaf colors
           type: 'leaf'
         })),
-        grass: Array.from({ length: 120 }, () => ({
-          x: rand(0, WIDTH),
-          y: rand(0, HEIGHT),
-          type: Math.floor(rand(0, 3))
-        })),
+        grass: Array.from({ length: 250 }, () => {
+          const pos = getPos(0, MAP_WIDTH, 0, MAP_HEIGHT);
+          return {
+            x: pos.x,
+            y: pos.y,
+            type: Math.floor(rand(0, 3))
+          };
+        }),
         wave: 1,
         isWaveActive: true,
         waveTimer: 60 * 60, // 60 seconds at 60fps
         dayTime: 0.42,
         player: {
-          x: WIDTH / 2,
-          y: HEIGHT / 2 + 66,
+          x: MAP_WIDTH / 2,
+          y: MAP_HEIGHT / 2 + 66,
           speed: 2.6,
           health: 100,
           maxHealth: 100,
@@ -593,23 +694,23 @@ function initialState(): GameState {
           hasHitThisAttack: false,
         },
         campfire,
-        resources: Array.from({ length: 120 }, () => makeResource(nextResourceType(0.42))),
+        resources: Array.from({ length: 180 }, () => makeResource(nextResourceType(0.42))),
         enemies: [] as any[],
         summons: [] as any[],
-        trees: Array.from({ length: 250 }, () => {
-          const pos = getPos(-50, WIDTH + 50, -50, HEIGHT + 50);
+        trees: Array.from({ length: 400 }, () => {
+          const pos = getPos(-50, MAP_WIDTH + 50, -50, MAP_HEIGHT + 50);
           return { x: pos.x, y: pos.y, size: rand(0.9, 1.4) };
         }),
-        rocks: Array.from({ length: 120 }, () => {
-          const pos = getPos(20, WIDTH - 20, 20, HEIGHT - 20);
+        rocks: Array.from({ length: 180 }, () => {
+          const pos = getPos(20, MAP_WIDTH - 20, 20, MAP_HEIGHT - 20);
           return { x: pos.x, y: pos.y, size: rand(0.8, 1.3) };
         }),
-        bushes: Array.from({ length: 200 }, () => {
-          const pos = getPos(20, WIDTH - 20, 20, HEIGHT - 20);
+        bushes: Array.from({ length: 300 }, () => {
+          const pos = getPos(20, MAP_WIDTH - 20, 20, MAP_HEIGHT - 20);
           return { x: pos.x, y: pos.y, size: rand(0.7, 1.2) };
         }),
-        mushrooms: Array.from({ length: 150 }, () => {
-          const pos = getPos(30, WIDTH - 30, 30, HEIGHT - 30);
+        mushrooms: Array.from({ length: 200 }, () => {
+          const pos = getPos(30, MAP_WIDTH - 30, 30, MAP_HEIGHT - 30);
           return { x: pos.x, y: pos.y };
         }),
         constructions: {
@@ -617,50 +718,34 @@ function initialState(): GameState {
           fenceSegments: [] as any[],
           towers: [] as any[],
           helpers: [] as any[],
-          dogs: [] as any[]
+          wolves: [] as any[],
+          falcons: [] as any[]
         },
         towerSlots: [
-          { x: WIDTH / 2 - 142, y: HEIGHT / 2 - 140, used: false },
-          { x: WIDTH / 2 + 142, y: HEIGHT / 2 - 140, used: false },
-          { x: WIDTH / 2 - 142, y: HEIGHT / 2 + 142, used: false },
-          { x: WIDTH / 2 + 142, y: HEIGHT / 2 + 142, used: false },
-          { x: WIDTH / 2 - 200, y: HEIGHT / 2, used: false },
-          { x: WIDTH / 2 + 200, y: HEIGHT / 2, used: false },
-          { x: WIDTH / 2, y: HEIGHT / 2 - 200, used: false },
-          { x: WIDTH / 2, y: HEIGHT / 2 + 200, used: false },
-          { x: WIDTH / 2 - 200, y: HEIGHT / 2 - 200, used: false },
-          { x: WIDTH / 2 + 200, y: HEIGHT / 2 - 200, used: false },
+          { x: MAP_WIDTH / 2 - 142, y: MAP_HEIGHT / 2 - 140, used: false },
+          { x: MAP_WIDTH / 2 + 142, y: MAP_HEIGHT / 2 - 140, used: false },
+          { x: MAP_WIDTH / 2 - 142, y: MAP_HEIGHT / 2 + 142, used: false },
+          { x: MAP_WIDTH / 2 + 142, y: MAP_HEIGHT / 2 + 142, used: false },
+          { x: MAP_WIDTH / 2 - 200, y: MAP_HEIGHT / 2, used: false },
+          { x: MAP_WIDTH / 2 + 200, y: MAP_HEIGHT / 2, used: false },
+          { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 - 200, used: false },
+          { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 + 200, used: false },
         ],
         helperSlots: [
-          { x: WIDTH / 2 - 80, y: HEIGHT / 2 + 26, used: false },
-          { x: WIDTH / 2 + 80, y: HEIGHT / 2 + 26, used: false },
-          { x: WIDTH / 2, y: HEIGHT / 2 - 56, used: false },
-          { x: WIDTH / 2 - 120, y: HEIGHT / 2 - 40, used: false },
-          { x: WIDTH / 2 + 120, y: HEIGHT / 2 - 40, used: false },
-          { x: WIDTH / 2 - 160, y: HEIGHT / 2 + 60, used: false },
-          { x: WIDTH / 2 + 160, y: HEIGHT / 2 + 60, used: false },
-          { x: WIDTH / 2, y: HEIGHT / 2 + 100, used: false },
-          { x: WIDTH / 2 - 100, y: HEIGHT / 2 + 120, used: false },
-          { x: WIDTH / 2 + 100, y: HEIGHT / 2 + 120, used: false },
+          { x: MAP_WIDTH / 2 - 80, y: MAP_HEIGHT / 2 + 26, used: false },
+          { x: MAP_WIDTH / 2 + 80, y: MAP_HEIGHT / 2 + 26, used: false },
+          { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 - 56, used: false },
+          { x: MAP_WIDTH / 2 - 120, y: MAP_HEIGHT / 2 - 40, used: false },
+          { x: MAP_WIDTH / 2 + 120, y: MAP_HEIGHT / 2 - 40, used: false },
+          { x: MAP_WIDTH / 2 - 160, y: MAP_HEIGHT / 2 + 60, used: false },
+          { x: MAP_WIDTH / 2 + 160, y: MAP_HEIGHT / 2 + 60, used: false },
+          { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 + 100, used: false },
+          { x: MAP_WIDTH / 2 - 100, y: MAP_HEIGHT / 2 + 120, used: false },
+          { x: MAP_WIDTH / 2 + 100, y: MAP_HEIGHT / 2 + 120, used: false },
         ],
-        isJoined: isJoined,
-        isHost: isHost,
-        roomId: roomId,
-        remotePlayers: {},
         projectiles: [] as any[],
         frame: 0,
       };
-    }
-
-    let state: GameState = initialState();
-    stateRef.current = state;
-
-    // Multiplayer Socket Setup - Emit AFTER state is initialized
-    if (isJoined && socketRef.current) {
-      console.log('Emitting join-room for:', roomId);
-      state.roomId = roomId;
-      state.isJoined = true;
-      socketRef.current.emit('join-room', roomId);
     }
 
     const weatherParticles = Array.from({ length: 55 }, () => ({
@@ -676,6 +761,9 @@ function initialState(): GameState {
     }
 
     function addParticles(x: number, y: number, color: string, count = 5) {
+      // Limit total particles for mobile performance
+      if (state.particles.length > 120) return;
+      
       for (let i = 0; i < count; i++) {
         state.particles.push({
           x, y,
@@ -692,20 +780,71 @@ function initialState(): GameState {
       state.effects.push({ x, y, pulse: true, color, life: 1 });
     }
 
+    let lastUIUpdate = {
+      health: -1,
+      wood: -1,
+      stone: -1,
+      fiber: -1,
+      gold: -1,
+      day: -1,
+      timeOfDay: -1,
+      wave: -1,
+      isWaveActive: false,
+      waveTimer: -1
+    };
+
     function updateUI() {
-      if (ui.healthText) ui.healthText.textContent = `${Math.round(state.player.health)} / ${state.player.maxHealth}`;
-      if (ui.healthFill) ui.healthFill.style.width = (state.player.health / state.player.maxHealth * 100) + '%';
-      if (ui.woodCount) ui.woodCount.textContent = String(state.player.wood);
-      if (ui.stoneCount) ui.stoneCount.textContent = String(state.player.stone);
-      if (ui.fiberCount) ui.fiberCount.textContent = String(state.player.fiber);
-      if (ui.goldCount) ui.goldCount.textContent = String(state.player.gold);
-      
+      const p = state.player;
       const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
-      const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level);
-      const levelName = levelData ? levelData.name : `Nível ${state.campfire.level}`;
-      const waveStatus = state.isWaveActive ? `Onda ${state.wave}` : 'Preparação';
       const timerSec = Math.ceil(state.waveTimer / 60);
-      if (ui.dayBadge) ui.dayBadge.textContent = `${levelName} — Dia ${state.day} (${isNight ? 'Noite' : 'Dia'}) | ${waveStatus} (${timerSec}s)`;
+
+      // Only update DOM if values changed
+      if (Math.round(p.health) !== lastUIUpdate.health) {
+        if (ui.healthText) ui.healthText.textContent = `${Math.round(p.health)} / ${p.maxHealth}`;
+        if (ui.healthFill) ui.healthFill.style.width = (p.health / p.maxHealth * 100) + '%';
+        lastUIUpdate.health = Math.round(p.health);
+      }
+      
+      if (p.wood !== lastUIUpdate.wood) {
+        if (ui.woodCount) ui.woodCount.textContent = String(p.wood);
+        lastUIUpdate.wood = p.wood;
+      }
+      if (p.stone !== lastUIUpdate.stone) {
+        if (ui.stoneCount) ui.stoneCount.textContent = String(p.stone);
+        lastUIUpdate.stone = p.stone;
+      }
+      if (p.fiber !== lastUIUpdate.fiber) {
+        if (ui.fiberCount) ui.fiberCount.textContent = String(p.fiber);
+        lastUIUpdate.fiber = p.fiber;
+      }
+      if (p.gold !== lastUIUpdate.gold) {
+        if (ui.goldCount) ui.goldCount.textContent = String(p.gold);
+        lastUIUpdate.gold = p.gold;
+      }
+
+      if (state.day !== lastUIUpdate.day || 
+          isNight !== (lastUIUpdate.timeOfDay > 0.25 && lastUIUpdate.timeOfDay < 0.75) ||
+          state.wave !== lastUIUpdate.wave ||
+          state.isWaveActive !== lastUIUpdate.isWaveActive ||
+          timerSec !== lastUIUpdate.waveTimer) {
+        
+        const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level);
+        const levelName = levelData ? levelData.name : `Nível ${state.campfire.level}`;
+        const isBossWave = state.wave % 5 === 0;
+        const waveStatus = state.isWaveActive 
+          ? (isBossWave ? `👑 CHEFE: Onda ${state.wave}` : `Onda ${state.wave}`) 
+          : 'Preparação';
+        
+        if (ui.dayBadge) {
+          ui.dayBadge.textContent = `${levelName} — Dia ${state.day} (${isNight ? 'Noite' : 'Dia'}) | ${waveStatus} (${timerSec}s)`;
+        }
+        
+        lastUIUpdate.day = state.day;
+        lastUIUpdate.timeOfDay = state.timeOfDay;
+        lastUIUpdate.wave = state.wave;
+        lastUIUpdate.isWaveActive = state.isWaveActive;
+        lastUIUpdate.waveTimer = timerSec;
+      }
       
       const mobile = isMobileLayout();
       if (ui.mobileUI) ui.mobileUI.style.display = mobile ? 'block' : 'none';
@@ -862,6 +1001,19 @@ function initialState(): GameState {
     ui.upgradeBtn?.addEventListener('click', handleUpgrade);
     ui.repairBtn?.addEventListener('touchstart', handleRepair);
     ui.repairBtn?.addEventListener('click', handleRepair);
+
+    // Reward Choice Listeners
+    const handleRewardAtk = (e: any) => { if (e.type === 'touchstart') e.preventDefault(); handleReward('atk'); };
+    const handleRewardDef = (e: any) => { if (e.type === 'touchstart') e.preventDefault(); handleReward('def'); };
+    const handleRewardEco = (e: any) => { if (e.type === 'touchstart') e.preventDefault(); handleReward('eco'); };
+
+    ui.rewardAtk?.addEventListener('click', handleRewardAtk);
+    ui.rewardAtk?.addEventListener('touchstart', handleRewardAtk);
+    ui.rewardDef?.addEventListener('click', handleRewardDef);
+    ui.rewardDef?.addEventListener('touchstart', handleRewardDef);
+    ui.rewardEco?.addEventListener('click', handleRewardEco);
+    ui.rewardEco?.addEventListener('touchstart', handleRewardEco);
+
     document.getElementById('startBtn')?.addEventListener('touchstart', handleStart);
     document.getElementById('startBtn')?.addEventListener('click', handleStart);
     document.getElementById('restartBtn')?.addEventListener('click', handleRestart);
@@ -930,8 +1082,11 @@ function initialState(): GameState {
       for (const tower of state.constructions.towers) {
         if (Math.hypot(x - tower.x, y - tower.y) < 26) return { type: 'tower', label: 'Torre', ref: tower };
       }
-      for (const dog of state.constructions.dogs) {
-        if (Math.hypot(x - dog.x, y - dog.y) < 20) return { type: 'dog', label: 'Cachorro', ref: dog };
+      for (const wolf of state.constructions.wolves) {
+        if (Math.hypot(x - wolf.x, y - wolf.y) < 20) return { type: 'wolf', label: 'Lobo', ref: wolf };
+      }
+      for (const falcon of state.constructions.falcons) {
+        if (Math.hypot(x - falcon.x, y - falcon.y) < 18) return { type: 'falcon', label: 'Falcão', ref: falcon };
       }
       for (const helper of state.constructions.helpers) {
         if (Math.hypot(x - helper.x, y - helper.y) < 22) return { type: 'helper', label: 'Soldado', ref: helper };
@@ -952,19 +1107,36 @@ function initialState(): GameState {
         if (!nextLevelData) return showMessage('Nível máximo da fogueira atingido!');
         
         const cost = nextLevelData.cost;
-        if (!canPay(p, cost)) return showMessage(`Upgrade Fogueira: ${cost.wood} madeira, ${cost.stone} pedra, ${cost.gold} ouro`);
+        if (!canPay(p, cost)) {
+          let costMsg = 'Faltam recursos: ';
+          if (cost.wood > p.wood) costMsg += `${cost.wood - p.wood} Madeira `;
+          if (cost.stone > p.stone) costMsg += `${cost.stone - p.stone} Pedra `;
+          if (cost.gold > p.gold) costMsg += `${cost.gold - p.gold} Ouro `;
+          return showMessage(costMsg);
+        }
         
         pay(p, cost);
         target.ref.level = level + 1;
-        target.ref.maxHp += 200;
+        target.ref.maxHp += 250;
         target.ref.hp = target.ref.maxHp;
-        state.cameraShake = 12;
+        state.cameraShake = 15;
         
         syncBaseDefenses(state);
         
+        // Feedback Visual Épico
         addPulse(target.ref.x, target.ref.y, '#ff9800');
-        addEffect(target.ref.x, target.ref.y - 40, `Fogueira Nível ${target.ref.level}!`, '#ff9800');
+        addPulse(target.ref.x, target.ref.y, '#ffffff');
+        addParticles(target.ref.x, target.ref.y, '#ffd700', 30);
+        addEffect(target.ref.x, target.ref.y - 60, `EVOLUÇÃO: ${nextLevelData.name.toUpperCase()}!`, '#ffd700');
         showMessage(`Base evoluída para: ${nextLevelData.name}!`);
+        
+        // Flash de tela
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        ctx.restore();
+        
+        updateUI();
         return;
       }
     }
@@ -974,42 +1146,21 @@ function initialState(): GameState {
       const missing = target.ref.maxHp - target.ref.hp;
       if (missing <= 0) return showMessage('Já está inteira!');
       
-      const cost = { wood: 5, stone: 2 };
-      if (!canPay(p, cost)) return showMessage(`Reparar: 5 madeira, 2 pedra`);
+      const cost = { wood: 10, stone: 5 };
+      if (!canPay(p, cost)) return showMessage(`Reparar: 10 madeira, 5 pedra`);
       
       pay(p, cost);
       state.cameraShake = 4;
-      target.ref.hp = Math.min(target.ref.maxHp, target.ref.hp + 50);
-      addEffect(target.ref.x || ((target.ref.x1 + target.ref.x2) / 2), (target.ref.y || ((target.ref.y1 + target.ref.y2) / 2)) - 16, '+50 HP!', '#89c36a');
+      target.ref.hp = Math.min(target.ref.maxHp, target.ref.hp + 100);
+      addEffect(target.ref.x || ((target.ref.x1 + target.ref.x2) / 2), (target.ref.y || ((target.ref.y1 + target.ref.y2) / 2)) - 16, '+100 HP!', '#89c36a');
     }
 
     function buyConstruction(type: string) {
-      const p = state.player;
-      const currentLevel = state.campfire.level;
-      const nextLevelData = CAMPFIRE_LEVELS.find(l => l.level === currentLevel + 1);
-
-      if (!nextLevelData) return showMessage('Nível máximo da base atingido!');
-
-      const cost = nextLevelData.cost;
-      if (!canPay(p, cost)) {
-        let costMsg = 'Recursos insuficientes: ';
-        if (cost.wood > 0) costMsg += `${cost.wood}W `;
-        if (cost.stone > 0) costMsg += `${cost.stone}S `;
-        if (cost.gold > 0) costMsg += `${cost.gold}G `;
-        return showMessage(costMsg);
+      // Redireciona para o upgrade da fogueira se for o botão de evoluir base
+      if (type === 'campfire') {
+        upgradeConstruction({ type: 'campfire', ref: state.campfire, label: 'Fogueira' });
+        return;
       }
-
-      pay(p, cost);
-      state.campfire.level += 1;
-      state.campfire.maxHp += 200;
-      state.campfire.hp = state.campfire.maxHp;
-      state.cameraShake = 10;
-      
-      syncBaseDefenses(state);
-      
-      addEffect(state.campfire.x, state.campfire.y - 42, `Base Nível ${state.campfire.level}!`, '#ffd700');
-      showMessage(`Base evoluída para: ${nextLevelData.name}!`);
-      updateUI();
     }
 
     // Joystick Logic
@@ -1089,8 +1240,8 @@ function initialState(): GameState {
         else state.player.facing = yAxis < 0 ? 'up' : 'down';
       }
 
-      state.player.x = clamp(state.player.x, 22, WIDTH - 22);
-      state.player.y = clamp(state.player.y, 22, HEIGHT - 22);
+      state.player.x = clamp(state.player.x, 22, MAP_WIDTH - 22);
+      state.player.y = clamp(state.player.y, 22, MAP_HEIGHT - 22);
 
       if (moving) {
         state.player.walkTimer += 1;
@@ -1105,31 +1256,45 @@ function initialState(): GameState {
     }
 
     function autoCollectResources() {
-      // Player collection
+      const playerX = state.player.x;
+      const playerY = state.player.y;
+      const collectRadiusSq = AUTO_COLLECT_RADIUS * AUTO_COLLECT_RADIUS;
+      
       state.resources = state.resources.filter(res => {
         if (res.respawning) return true;
         
-        // Check player
-        const distToPlayer = Math.hypot(state.player.x - res.x, state.player.y - res.y);
-        let collectedBy = null;
+        const dxP = playerX - res.x;
+        const dyP = playerY - res.y;
+        const distSqP = dxP * dxP + dyP * dyP;
         
-        if (distToPlayer <= AUTO_COLLECT_RADIUS) {
+        let collectedBy = null;
+        if (distSqP <= collectRadiusSq) {
           collectedBy = state.player;
         } else {
-          // Check helpers
           for (const h of state.constructions.helpers) {
-            const distToHelper = Math.hypot(h.x - res.x, h.y - res.y);
-            if (distToHelper <= 25) {
+            const dxH = h.x - res.x;
+            const dyH = h.y - res.y;
+            if (dxH * dxH + dyH * dyH <= 625) { // 25^2
               collectedBy = h;
               break;
             }
           }
-          // Check dogs
           if (!collectedBy) {
-            for (const d of state.constructions.dogs) {
-              const distToDog = Math.hypot(d.x - res.x, d.y - res.y);
-              if (distToDog <= 30) {
-                collectedBy = d;
+            for (const w of state.constructions.wolves) {
+              const dxW = w.x - res.x;
+              const dyW = w.y - res.y;
+              if (dxW * dxW + dyW * dyW <= 1225) { // 35^2
+                collectedBy = w;
+                break;
+              }
+            }
+          }
+          if (!collectedBy) {
+            for (const f of state.constructions.falcons) {
+              const dxF = f.x - res.x;
+              const dyF = f.y - res.y;
+              if (dxF * dxF + dyF * dyF <= 1600) { // 40^2
+                collectedBy = f;
                 break;
               }
             }
@@ -1148,17 +1313,18 @@ function initialState(): GameState {
           const color = type === 'wood' ? '#8c5a39' : type === 'stone' ? '#808074' : type === 'fiber' ? '#79a950' : '#ffd700';
           addParticles(res.x, res.y, color, 8);
           res.respawning = true;
-          const amount = 3; // Increased resource abundance
+          const amount = Math.round(3 * (state.player.resourceMult || 1.0));
           if (type === 'wood') state.player.wood += amount;
-          if (type === 'stone') state.player.stone += amount;
-          if (type === 'fiber') state.player.fiber += amount;
-          if (type === 'gold') state.player.gold += amount;
+          else if (type === 'stone') state.player.stone += amount;
+          else if (type === 'fiber') state.player.fiber += amount;
+          else if (type === 'gold') state.player.gold += amount;
+          
           addEffect(res.x, res.y - 16, `+${amount} ${type === 'wood' ? 'madeira' : type === 'stone' ? 'pedra' : type === 'fiber' ? 'fibra' : 'ouro'}`, '#e4d0a4');
           res.x = -9999;
           res.y = -9999;
           setTimeout(() => {
             res.type = nextResourceType();
-            const pos = getPos(60, WIDTH - 60, 60, HEIGHT - 60);
+            const pos = getPos(60, MAP_WIDTH - 60, 60, MAP_HEIGHT - 60);
             res.x = pos.x;
             res.y = pos.y;
             res.respawning = false;
@@ -1175,16 +1341,6 @@ function initialState(): GameState {
       state.player.attackTimer = 10; // Animation duration
       state.player.attackAngle = Math.atan2(ty - state.player.y, tx - state.player.x);
 
-      // Multiplayer Emit Attack
-      if (socketRef.current && state.isJoined) {
-        socketRef.current.emit('player-attack', {
-          roomId: state.roomId,
-          x: state.player.x,
-          y: state.player.y,
-          ang: state.player.attackAngle
-        });
-      }
-      
       const range = 65;
       // If host, apply damage directly. If not, the host will handle it via 'remote-attack' event.
       // Actually, to make it feel responsive, we can apply it locally too, but the host is the source of truth.
@@ -1202,6 +1358,12 @@ function initialState(): GameState {
             // Only apply actual damage if host or if we want local prediction
             enemy.hp -= dmg;
             enemy.hitFlash = 5;
+
+            // Boss damage feedback
+            if (enemy.type === 'boss') {
+              addParticles(enemy.x, enemy.y, '#ffd700', 12);
+              triggerShake(isCrit ? 12 : 6);
+            }
             
             // Knockback
             const kx = enemy.x - state.player.x;
@@ -1214,7 +1376,7 @@ function initialState(): GameState {
             addEffect(enemy.x, enemy.y, isCrit ? 'CRÍTICO!' : `-${dmg}`, isCrit ? '#ffff00' : '#ffffff');
             addParticles(enemy.x, enemy.y, '#ff0000', 8);
             
-            if (enemy.hp <= 0 && state.isHost) {
+            if (enemy.hp <= 0) {
               const isChest = Math.random() < 0.10;
               if (isChest) {
                 state.player.gold += 5;
@@ -1247,139 +1409,356 @@ function initialState(): GameState {
     (window as any).playerAttack = playerAttackDirectional;
     (window as any).closeUpgradePanel = () => { if (ui.upgradePanel) ui.upgradePanel.style.display = 'none'; };
 
+    // Helper to check if a position is clear of major obstacles
+    function isSpawnPositionValid(x: number, y: number) {
+      // Check trees (main obstacles) with a slightly larger buffer for better pathing
+      for (const t of state.trees) {
+        const dx = x - t.x;
+        const dy = y - t.y;
+        if (dx * dx + dy * dy < 1600) return false; // 40^2 (increased from 35)
+      }
+      // Check rocks
+      for (const r of state.rocks) {
+        const dx = x - r.x;
+        const dy = y - r.y;
+        if (dx * dx + dy * dy < 1225) return false; // 35^2 (increased from 30)
+      }
+      
+      // Ensure it's not too close to constructions
+      for (const t of state.constructions.towers) {
+        const dx = x - t.x;
+        const dy = y - t.y;
+        if (dx * dx + dy * dy < 2500) return false; // 50^2
+      }
+
+      return true;
+    }
+
     function spawnEnemy() {
       if (!state.isWaveActive) return; // Only spawn during wave combat phase
       state.spawnTimer = Math.max(0, state.spawnTimer - 1);
       if (state.spawnTimer > 0) return;
 
-      const minutes = state.timeElapsed / 60;
+      const wave = state.wave;
+      const isBossWave = wave % 5 === 0;
       const isNight = state.timeOfDay > 0.25 && state.timeOfDay < 0.75;
       
-      let spawnCount = 1;
-      let spawnInterval = 300; // 5s
+      // Difficulty scaling based on wave
+      let spawnCount = 1 + Math.floor(wave / 3);
+      let spawnInterval = Math.max(60, 300 - (wave * 15)); 
+      
+      // 1. Progressive Pressure & Variable Rhythm (Balanced)
+      // Calculate wave progress (0 to 1)
+      const totalWaveTime = wave % 5 === 0 ? 5400 : 3600; 
+      const waveProgress = Math.min(1, (totalWaveTime - state.waveTimer) / totalWaveTime);
+      
+      // Rhythm: Balanced factors
+      const rhythmFactor = (wave % 4 === 0) ? 1.3 : 1.0; 
+      const speedFactor = (wave % 3 === 0) ? 0.8 : 1.0; 
+      
+      // Capped intensity scaling to avoid explosion
+      const intensityScale = 1 + waveProgress * 0.4; 
+      spawnInterval = Math.max(40, (spawnInterval * speedFactor) / intensityScale);
+      spawnCount = Math.floor(spawnCount * rhythmFactor * intensityScale);
+
       let possibleTypes = ['normal'];
+      const nightMult = isNight ? 1.4 : 1.0; // Reduced from 1.5
 
-      const nightMult = isNight ? 1.4 : 1.0;
-
-      if (minutes >= 10) {
-        spawnCount = Math.floor(8 * nightMult);
-        spawnInterval = 120; // 2s
-        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer', 'shaman', 'boss'];
-      } else if (minutes >= 5) {
-        spawnCount = Math.floor(6 * nightMult);
-        spawnInterval = 150; // 2.5s
+      // Unlock new enemy types based on wave
+      if (wave >= 15) {
         possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer', 'shaman'];
-      } else if (minutes >= 2) {
-        spawnCount = Math.floor(5 * nightMult);
-        spawnInterval = 180; // 3s
-        possibleTypes = ['normal', 'green', 'skeleton', 'archer'];
+      } else if (wave >= 10) {
+        possibleTypes = ['normal', 'green', 'fast', 'armored', 'skeleton', 'archer'];
+      } else if (wave >= 6) {
+        possibleTypes = ['normal', 'green', 'fast', 'skeleton'];
+      } else if (wave >= 3) {
+        possibleTypes = ['normal', 'green', 'skeleton'];
       }
       
       if (isNight && !possibleTypes.includes('skeleton')) {
         possibleTypes.push('skeleton');
       }
 
+      // Adjust spawn count for night
+      spawnCount = Math.floor(spawnCount * nightMult);
       state.spawnTimer = spawnInterval;
 
-      for (let i = 0; i < spawnCount; i++) {
-        const side = Math.floor(Math.random() * 4);
-        let x = 0, y = 0;
-        if (side === 0) { x = rand(0, WIDTH); y = -20; }
-        if (side === 1) { x = WIDTH + 20; y = rand(0, HEIGHT); }
-        if (side === 2) { x = rand(0, WIDTH); y = HEIGHT + 20; }
-        if (side === 3) { x = -20; y = rand(0, HEIGHT); }
-
-        const r = Math.random();
-        let type = 'normal';
-        if (possibleTypes.includes('boss') && r < 0.05) {
-          type = 'boss';
-          showQuestMessage('¡O Rei Slime apareceu!', 4000);
+      // Special Boss Spawn Logic (Milestones every 5 waves)
+      const hasBoss = state.enemies.some((e: any) => e.type === 'boss');
+      if (isBossWave) {
+        // Randomized spawn window based on wave seed
+        const spawnThreshold = 0.1 + ((wave * 7) % 15) / 100; 
+        
+        if (!hasBoss && waveProgress > spawnThreshold && waveProgress < spawnThreshold + 0.1) {
+          spawnBoss(wave);
         }
-        else if (possibleTypes.includes('shaman') && r < 0.10) type = 'shaman';
-        else if (possibleTypes.includes('archer') && r < 0.20) type = 'archer';
-        else if (possibleTypes.includes('armored') && r < 0.30) type = 'armored';
-        else if (possibleTypes.includes('skeleton') && r < 0.40) type = 'skeleton';
-        else if (possibleTypes.includes('fast') && r < 0.50) type = 'fast';
-        else if (possibleTypes.includes('green') && r < 0.70) type = 'green';
+        // Reduce normal enemy count during boss waves to focus on the boss
+        spawnCount = Math.floor(spawnCount * 0.4);
+      }
+      
+      // Determine primary attack direction for this wave (0: Top, 1: Right, 2: Bottom, 3: Left)
+      const primarySide = wave % 4;
+      const isPincerWave = wave >= 8 && wave % 3 === 0;
+      const secondarySide = (primarySide + 2) % 4; // Opposite side
+      
+      // Grouping logic: spawn in small clusters (squads)
+      const squadSize = Math.max(1, Math.min(4, Math.floor(spawnCount / 2) + 1));
+      const numSquads = Math.ceil(spawnCount / squadSize);
 
-        const hpMult = 1 + (state.day - 1) * 0.2;
-        const dmgMult = 1 + (state.day - 1) * 0.1;
-
-        let baseHp = (45 + state.day * 3) * hpMult;
-        let speed = 0.35 + state.day * 0.01;
-        let damage = 0.12 * dmgMult;
-        let size = 1;
-        let color = '#8b5046'; // Slime Azul (default)
-        let focusFences = false;
-
-        if (type === 'boss') {
-          baseHp *= 10;
-          speed *= 0.4;
-          damage *= 4;
-          size = 2.5;
-          color = '#ffd700'; // Gold for King Slime
-        } else if (type === 'armored') {
-          baseHp *= 3;
-          speed *= 0.5;
-          damage *= 2;
-          size = 1.5;
-          color = '#b35d44'; // Golem
-          focusFences = true;
-        } else if (type === 'fast') {
-          baseHp *= 0.6;
-          speed *= 2.0;
-          damage *= 0.8;
-          size = 0.8;
-          color = '#8a2be2'; // Drackee
-        } else if (type === 'green') {
-          baseHp *= 1.5;
-          speed *= 0.8;
-          damage *= 1.2;
-          size = 1.1;
-          color = '#2e8b57'; // Slime Verde
-        } else if (type === 'skeleton') {
-          baseHp *= 1.2;
-          speed *= 1.1;
-          damage *= 1.4;
-          size = 1.2;
-          color = '#e0e0e0'; // Skeleton Bone
-        } else if (type === 'archer') {
-          baseHp *= 0.8;
-          speed *= 0.7;
-          damage *= 1.0;
-          size = 1.0;
-          color = '#ff8c00'; // Dark Orange Archer
-        } else if (type === 'shaman') {
-          baseHp *= 1.5;
-          speed *= 0.6;
-          damage *= 0.5;
-          size = 1.1;
-          color = '#9932cc'; // Dark Orchid Shaman
+      // 2. In-wave Events (Balanced with Cooldown)
+      if (eventCooldown > 0) eventCooldown--;
+      
+      let eventType = 'none';
+      // Trigger event only if cooldown is off and wave is high enough
+      if (eventCooldown <= 0 && wave >= 2 && state.frame % 60 === 0) {
+        if (Math.random() < 0.12) { // 12% chance every second
+          const rEvent = Math.random();
+          if (rEvent < 0.4) eventType = 'rush';
+          else if (rEvent < 0.7) eventType = 'elite';
+          else eventType = 'ambush';
+          
+          eventCooldown = 1200; // 20 seconds cooldown between events
+          
+          // Improved visual feedback
+          const eventMsgs: Record<string, string> = {
+            'rush': 'EVENTO: CORRIDA DE VELOCIDADE!',
+            'elite': 'EVENTO: INIMIGO DE ELITE!',
+            'ambush': 'EVENTO: EMBOSCADA LATERAL!'
+          };
+          showQuestMessage(eventMsgs[eventType], 3500);
+          triggerShake(6);
         }
+      }
 
-        state.enemies.push({
-          x, y,
-          vx: 0, vy: 0,
-          hp: baseHp, maxHp: baseHp,
-          speed, damage,
-          cooldown: 0, hitFlash: 0,
-          type, size, color, focusFences,
-          strategyOffset: { x: rand(-30, 30), y: rand(-30, 30) },
-          stuckTimer: 0
-        });
+      // Count special behaviors to enforce limits
+      let currentHunters = 0;
+      let currentInfiltrators = 0;
+      for (const e of state.enemies) {
+        if (e.behavior === 1) currentHunters++;
+        if (e.behavior === 2) currentInfiltrators++;
+      }
+
+      for (let s = 0; s < numSquads; s++) {
+        if (state.enemies.length >= 100) break; // Performance safety cap
+
+        // Pick a side for this squad
+        let side = primarySide;
+        if (eventType === 'ambush') {
+          side = Math.floor(Math.random() * 4); // Random side for ambush
+          spawnCount += 2; // Extra enemies for ambush
+        } else if (isPincerWave) {
+          side = Math.random() < 0.5 ? primarySide : secondarySide;
+        } else {
+          // 80% chance for primary side, 20% random for variety
+          side = Math.random() < 0.8 ? primarySide : Math.floor(Math.random() * 4);
+        }
+        
+        // Base position for the squad (outside the map)
+        let baseX = 0, baseY = 0;
+        if (side === 0) { baseX = rand(100, MAP_WIDTH - 100); baseY = -60; }
+        if (side === 1) { baseX = MAP_WIDTH + 60; baseY = rand(100, MAP_HEIGHT - 100); }
+        if (side === 2) { baseX = rand(100, MAP_WIDTH - 100); baseY = MAP_HEIGHT + 60; }
+        if (side === 3) { baseX = -60; baseY = rand(100, MAP_HEIGHT - 100); }
+
+        const currentSquadSize = eventType === 'rush' ? squadSize + 2 : squadSize;
+
+        for (let i = 0; i < currentSquadSize; i++) {
+          let x = baseX + rand(-50, 50);
+          let y = baseY + rand(-50, 50);
+          
+          // Validation: Try to find a clear spot
+          let attempts = 0;
+          while (!isSpawnPositionValid(x, y) && attempts < 8) {
+            x = baseX + rand(-80, 80);
+            y = baseY + rand(-80, 80);
+            attempts++;
+          }
+
+          const r = Math.random();
+          let type = 'normal';
+          
+          // Force boss if it's a boss wave and none exists
+          if (isBossWave && !hasBoss && s === 0 && i === 0) {
+            type = 'boss';
+          } else if (eventType === 'elite' && s === 0 && i === 0) {
+            type = 'armored'; // Elite is an armored enemy
+          } else if (eventType === 'rush') {
+            type = 'fast'; // Rush event spawns fast enemies
+          } else {
+            // Normal random type selection
+            if (possibleTypes.includes('shaman') && r < 0.08) type = 'shaman';
+            else if (possibleTypes.includes('archer') && r < 0.15) type = 'archer';
+            else if (possibleTypes.includes('armored') && r < 0.25) type = 'armored';
+            else if (possibleTypes.includes('skeleton') && r < 0.35) type = 'skeleton';
+            else if (possibleTypes.includes('fast') && r < 0.45) type = 'fast';
+            else if (possibleTypes.includes('green') && r < 0.65) type = 'green';
+          }
+
+          const cfLevel = state.campfire.level || 1;
+          // Scaling HP and Damage with wave
+          // Adjusted to follow player power slightly
+          const playerPowerFactor = ((state.player.damageMult || 1.0) - 1.0) * 0.4;
+          let hpMult = 1 + (wave - 1) * 0.12 + (cfLevel - 1) * 0.08 + playerPowerFactor;
+          let dmgMult = 1 + (wave - 1) * 0.08 + (cfLevel - 1) * 0.04;
+          let speedMult = 1.0;
+
+          // Event modifiers
+          if (eventType === 'elite' && type === 'armored') {
+            hpMult *= 2;
+            dmgMult *= 1.5;
+          }
+
+          // 1. Progressive Pressure: Speed up as wave ends
+          speedMult *= (1 + waveProgress * 0.3);
+
+          let baseHp = (50 + wave * 5) * hpMult;
+          let speed = (0.4 + wave * 0.01 + (cfLevel * 0.01)) * speedMult;
+          let damage = 0.15 * dmgMult;
+          let size = 1;
+          let color = '#8b5046'; 
+          let focusFences = false;
+
+          // 3. Behavioral Variation (Balanced Limits)
+          let behavior = 0; 
+          const rBeh = Math.random();
+          // Hunters: Max 4, Infiltrators: Max 2
+          if (rBeh < 0.15 && currentHunters < 4) { 
+            behavior = 1; 
+            currentHunters++;
+          } else if (rBeh < 0.25 && currentInfiltrators < 2) { 
+            behavior = 2; 
+            currentInfiltrators++;
+          }
+
+          if (type === 'boss') {
+            baseHp *= (8 + wave * 0.5); 
+            speed *= 0.5;
+            damage *= 5;
+            size = 3.0;
+            color = '#ffd700'; 
+            focusFences = true;
+          } else if (type === 'armored') {
+            baseHp *= 3;
+            speed *= 0.6;
+            damage *= 2;
+            size = 1.6;
+            color = '#b35d44'; 
+            focusFences = true;
+          } else if (type === 'fast') {
+            baseHp *= 0.7;
+            speed *= 1.8;
+            damage *= 0.8;
+            size = 0.8;
+            color = '#8a2be2'; 
+          } else if (type === 'green') {
+            baseHp *= 1.4;
+            speed *= 0.9;
+            damage *= 1.1;
+            size = 1.1;
+            color = '#2e8b57'; 
+          } else if (type === 'skeleton') {
+            baseHp *= 1.1;
+            speed *= 1.1;
+            damage *= 1.3;
+            size = 1.2;
+            color = '#e0e0e0'; 
+          } else if (type === 'archer') {
+            baseHp *= 0.8;
+            speed *= 0.8;
+            damage *= 1.0;
+            size = 1.0;
+            color = '#ff8c00'; 
+          } else if (type === 'shaman') {
+            baseHp *= 1.4;
+            speed *= 0.7;
+            damage *= 0.6;
+            size = 1.1;
+            color = '#9932cc'; 
+          }
+
+          state.enemies.push({
+            x, y,
+            vx: 0, vy: 0,
+            hp: baseHp, maxHp: baseHp,
+            speed, damage,
+            cooldown: 0, hitFlash: 0,
+            type, size, color, focusFences,
+            behavior,
+            strategyOffset: { x: rand(-40, 40), y: rand(-40, 40) },
+            stuckTimer: 0
+          });
+        }
       }
     }
 
     function segmentCenter(seg: any) { return { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }; }
 
     function updateEnemies() {
-      for (let i = 0; i < state.enemies.length; i++) {
-        const enemy = state.enemies[i];
+      const enemies = state.enemies;
+      const numEnemies = enemies.length;
+      
+      for (let i = 0; i < numEnemies; i++) {
+        const enemy = enemies[i];
         if (enemy.hitFlash > 0) enemy.hitFlash--;
         enemy.cooldown = Math.max(0, enemy.cooldown - 1);
         enemy.slowTimer = Math.max(0, (enemy.slowTimer || 0) - 1);
         
-        const currentSpeed = enemy.slowTimer > 0 ? enemy.speed * 0.4 : enemy.speed;
+        let currentSpeed = enemy.slowTimer > 0 ? enemy.speed * 0.4 : enemy.speed;
+
+        // Boss Logic (Telegraph, Phases, Behavior)
+        let moveSpeed = currentSpeed;
+        if (enemy.type === 'boss') {
+          // 1. Phases (Enraged below 50% HP)
+          const isEnraged = enemy.hp < enemy.maxHp * 0.5;
+          const attackCooldown = isEnraged ? 150 : 240; 
+          const speedMult = isEnraged ? 1.3 : 1.0;
+          
+          // 2. Behavior Switching
+          if (enemy.phaseTimer === undefined) enemy.phaseTimer = 0;
+          enemy.phaseTimer--;
+          if (enemy.phaseTimer <= 0) {
+            enemy.phaseTimer = 180 + Math.random() * 120; 
+            const r = Math.random();
+            if (r < 0.5) enemy.behavior = 1; // Focus Player
+            else if (r < 0.8) enemy.behavior = 0; // Focus Campfire
+            else enemy.behavior = 3; // Aggressive Dash
+          }
+          
+          moveSpeed = enemy.behavior === 3 ? currentSpeed * 2.2 * speedMult : currentSpeed * speedMult;
+
+          // 3. Telegraph for Stomp
+          if (enemy.cooldown <= 0) {
+            const dxP = enemy.x - state.player.x;
+            const dyP = enemy.y - state.player.y;
+            const distToPlayerSq = dxP * dxP + dyP * dyP;
+            
+            if (distToPlayerSq < 14400) { // 120px
+              if (enemy.prepStomp === undefined) enemy.prepStomp = 0;
+              enemy.prepStomp++;
+              
+              // Stop moving while prepping
+              moveSpeed = 0;
+
+              if (enemy.prepStomp >= 45) { // 0.75s telegraph
+                enemy.prepStomp = 0;
+                enemy.cooldown = attackCooldown;
+                triggerShake(15);
+                addPulse(enemy.x, enemy.y, 'rgba(255, 0, 0, 0.6)');
+                
+                const ang = Math.atan2(dyP, dxP);
+                state.player.x += Math.cos(ang) * 60;
+                state.player.y += Math.sin(ang) * 60;
+                state.player.health = Math.max(0, state.player.health - 18);
+                state.player.hitFlash = 12;
+                addEffect(state.player.x, state.player.y - 20, 'PISOTÃO!', '#ff0000', true);
+              }
+            } else {
+              enemy.prepStomp = 0;
+            }
+          }
+          // Apply boss-specific speed to currentSpeed for the rest of the loop
+          currentSpeed = moveSpeed;
+        }
 
         // Apply knockback/velocity
         enemy.x += enemy.vx;
@@ -1387,25 +1766,32 @@ function initialState(): GameState {
         enemy.vx *= 0.85;
         enemy.vy *= 0.85;
 
-        // Separation (enemies push each other away)
-        for (let j = i + 1; j < state.enemies.length; j++) {
-          const other = state.enemies[j];
-          const dist = Math.hypot(enemy.x - other.x, enemy.y - other.y);
-          if (dist < 18) {
-            const ang = Math.atan2(enemy.y - other.y, enemy.x - other.x);
+        // Separation (enemies push each other away) - Optimized with Spatial Grid
+        const nearby = getNearbyEnemies(enemy.x, enemy.y, 20);
+        for (let j = 0; j < nearby.length; j++) {
+          const other = nearby[j];
+          if (enemy === other) continue;
+          const dx = enemy.x - other.x;
+          const dy = enemy.y - other.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < 324) { // 18^2
+            const dist = Math.sqrt(distSq) || 1;
+            const ang = Math.atan2(dy, dx);
             const force = (18 - dist) * 0.05;
-            enemy.vx += Math.cos(ang) * force;
-            enemy.vy += Math.sin(ang) * force;
-            other.vx -= Math.cos(ang) * force;
-            other.vy -= Math.sin(ang) * force;
+            const fx = Math.cos(ang) * force;
+            const fy = Math.sin(ang) * force;
+            enemy.vx += fx;
+            enemy.vy += fy;
           }
         }
 
-        // Construction collision (Optimized: direct loop)
+        // Construction collision
         for (const c of state.constructions.towers) {
-          const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-          if (d < 24) {
-            const ang = Math.atan2(enemy.y - c.y, enemy.x - c.x);
+          const dx = enemy.x - c.x;
+          const dy = enemy.y - c.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < 576) { // 24^2
+            const ang = Math.atan2(dy, dx);
             enemy.x = c.x + Math.cos(ang) * 24;
             enemy.y = c.y + Math.sin(ang) * 24;
           }
@@ -1413,34 +1799,53 @@ function initialState(): GameState {
 
         let target: any = { x: state.campfire.x, y: state.campfire.y, type: 'campfire' };
 
-        if (state.constructions.fenceBuilt && state.constructions.fenceSegments.length) {
-          let bestSeg = null;
-          let bestDist = Infinity;
+        // 3. Behavioral Variation & Safety Fallbacks
+        // behavior 1: Focus Player (with fallback if player is dead/too far)
+        if (enemy.behavior === 1) {
+          const dxP = enemy.x - state.player.x;
+          const dyP = enemy.y - state.player.y;
+          const distSq = dxP * dxP + dyP * dyP;
           
-          // Armored enemies focus on fences
+          if (state.player.health > 0 && distSq < 250000) { // Within 500px
+            target = { x: state.player.x, y: state.player.y, type: 'player' };
+          } else {
+            target = { x: state.campfire.x, y: state.campfire.y, type: 'campfire' };
+          }
+        } else if (enemy.behavior === 2) {
+          // behavior 2: Infiltrator (Focus campfire, ignore fences unless blocked)
+          target = { x: state.campfire.x, y: state.campfire.y, type: 'campfire' };
+        } else if (state.constructions.fenceBuilt && state.constructions.fenceSegments.length) {
+          let bestSeg = null;
+          let bestDistSq = Infinity;
+          
           if (enemy.focusFences) {
             for (const seg of state.constructions.fenceSegments) {
               const c = segmentCenter(seg);
-              const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-              if (d < bestDist) { bestDist = d; bestSeg = seg; }
+              const dx = enemy.x - c.x;
+              const dy = enemy.y - c.y;
+              const dSq = dx * dx + dy * dy;
+              if (dSq < bestDistSq) { bestDistSq = dSq; bestSeg = seg; }
             }
           } else {
-            // Prioritize gates if they are relatively close
             const gate = state.constructions.fenceSegments.find(s => s.kind === 'gate');
             if (gate) {
               const gc = segmentCenter(gate);
-              const gd = Math.hypot(enemy.x - gc.x, enemy.y - gc.y);
-              if (gd < 180) { // If within "detection" range of gate
+              const dx = enemy.x - gc.x;
+              const dy = enemy.y - gc.y;
+              const dSq = dx * dx + dy * dy;
+              if (dSq < 32400) { // 180^2
                 bestSeg = gate;
-                bestDist = gd;
+                bestDistSq = dSq;
               }
             }
 
             if (!bestSeg) {
               for (const seg of state.constructions.fenceSegments) {
                 const c = segmentCenter(seg);
-                const d = Math.hypot(enemy.x - c.x, enemy.y - c.y);
-                if (d < bestDist) { bestDist = d; bestSeg = seg; }
+                const dx = enemy.x - c.x;
+                const dy = enemy.y - c.y;
+                const dSq = dx * dx + dy * dy;
+                if (dSq < bestDistSq) { bestDistSq = dSq; bestSeg = seg; }
               }
             }
           }
@@ -1451,32 +1856,34 @@ function initialState(): GameState {
           }
         }
 
-        // Apply strategic offset to surround target
         const tx = target.x + (enemy.strategyOffset?.x || 0);
         const ty = target.y + (enemy.strategyOffset?.y || 0);
         
         const dx = tx - enemy.x;
         const dy = ty - enemy.y;
-        const d = Math.hypot(dx, dy) || 1;
+        const dSq = dx * dx + dy * dy;
+        const d = Math.sqrt(dSq) || 1;
         
-        // Only move if not being knocked back significantly
-        if (Math.hypot(enemy.vx, enemy.vy) < 0.5) {
+        if (enemy.vx * enemy.vx + enemy.vy * enemy.vy < 0.25) {
           const prevX = enemy.x;
           const prevY = enemy.y;
 
           if (enemy.type === 'archer') {
-            const distToPlayer = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
-            if (distToPlayer > 180) {
+            const dxP = enemy.x - state.player.x;
+            const dyP = enemy.y - state.player.y;
+            const distToPlayerSq = dxP * dxP + dyP * dyP;
+            
+            if (distToPlayerSq > 32400) { // 180^2
               enemy.x += (dx / d) * currentSpeed;
               enemy.y += (dy / d) * currentSpeed;
-            } else if (distToPlayer < 120) {
+            } else if (distToPlayerSq < 14400) { // 120^2
               enemy.x -= (dx / d) * currentSpeed;
               enemy.y -= (dy / d) * currentSpeed;
             }
 
-            if (enemy.cooldown <= 0 && distToPlayer < 250) {
-              enemy.cooldown = 120; // 2s between shots
-              const ang = Math.atan2(state.player.y - enemy.y, state.player.x - enemy.x);
+            if (enemy.cooldown <= 0 && distToPlayerSq < 62500) { // 250^2
+              enemy.cooldown = 120;
+              const ang = Math.atan2(-dyP, -dxP);
               state.projectiles.push({
                 x: enemy.x,
                 y: enemy.y,
@@ -1491,15 +1898,17 @@ function initialState(): GameState {
             enemy.x += (dx / d) * currentSpeed;
             enemy.y += (dy / d) * currentSpeed;
 
-            const distToPlayer = Math.hypot(enemy.x - state.player.x, enemy.y - state.player.y);
-            if (distToPlayer < 80 && enemy.cooldown <= 0) {
-              enemy.cooldown = 180; // 3s between debuffs
-              state.player.slowed = 120; // 2s slow
+            const dxP = enemy.x - state.player.x;
+            const dyP = enemy.y - state.player.y;
+            const distToPlayerSq = dxP * dxP + dyP * dyP;
+            if (distToPlayerSq < 6400 && enemy.cooldown <= 0) { // 80^2
+              enemy.cooldown = 180;
+              state.player.slowed = 120;
               addEffect(state.player.x, state.player.y - 20, 'LENTO!', '#9932cc');
               triggerShake(2);
             }
           } else {
-            if (d > 14) {
+            if (dSq > 196) { // 14^2
               enemy.x += (dx / d) * currentSpeed;
               enemy.y += (dy / d) * currentSpeed;
             } else if (enemy.cooldown <= 0) {
@@ -1509,7 +1918,6 @@ function initialState(): GameState {
                 target.ref.hitFlash = 5;
                 triggerShake(2);
                 addEffect(target.ref.x1 || target.ref.x, target.ref.y1 || target.ref.y, '-8', '#ff5252');
-                addEffect(target.x, target.y - 6, '-8', '#d86b60');
               } else {
                 state.player.health = clamp(state.player.health - enemy.damage * 8, 0, 100);
                 state.player.hitFlash = 5;
@@ -1518,8 +1926,9 @@ function initialState(): GameState {
             }
           }
 
-          // Stuck detection
-          if (Math.hypot(enemy.x - prevX, enemy.y - prevY) < 0.1) {
+          const dxMoved = enemy.x - prevX;
+          const dyMoved = enemy.y - prevY;
+          if (dxMoved * dxMoved + dyMoved * dyMoved < 0.01) {
             enemy.stuckTimer = (enemy.stuckTimer || 0) + 1;
             if (enemy.stuckTimer > 60) {
               enemy.vx += (Math.random() - 0.5) * 2;
@@ -1543,22 +1952,57 @@ function initialState(): GameState {
         if (e.hp <= 0 && !e.dying) {
           e.dying = 30; // 30 frames of death animation
           
-          // Loot drop (18% chance)
-          if (Math.random() < 0.18) {
+          // Boss Reward
+          if (e.type === 'boss') {
+            const goldBonus = 50 + state.wave * 10;
+            const woodBonus = 20 + state.wave * 5;
+            const stoneBonus = 10 + state.wave * 3;
+            
+            state.player.gold += goldBonus;
+            state.player.wood += woodBonus;
+            state.player.stone += stoneBonus;
+            
+            showQuestMessage(`CHEFE DERROTADO! +${goldBonus} ouro, +${woodBonus} madeira, +${stoneBonus} pedra`, 5000);
+            triggerShake(20);
+            
+            // Extra explosion particles for boss
+            for (let i = 0; i < 20; i++) {
+              state.particles.push({
+                x: e.x, y: e.y,
+                vx: (Math.random() - 0.5) * 6,
+                vy: (Math.random() - 0.5) * 6,
+                life: 1.5,
+                size: rand(5, 12),
+                color: '#ffd700'
+              });
+            }
+          }
+          
+          // Loot drop (18% chance for normal enemies, 100% for boss)
+          if (Math.random() < 0.18 || e.type === 'boss') {
             const r = Math.random();
             let lootType = 'herb';
             let lootName = 'Erva Medicinal';
-            if (r < 0.05) { lootType = 'chalice'; lootName = 'Cálice de Vida'; }
-            else if (r < 0.15) { lootType = 'sword'; lootName = 'Espada de Bronze'; }
-            else if (r < 0.30) { lootType = 'ring'; lootName = 'Anel de Velocidade'; }
-            else if (r < 0.45) { lootType = 'boot'; lootName = 'Bota de Mercúrio'; }
-            else if (r < 0.65) { lootType = 'gem'; lootName = 'Gema de Liderança'; }
+            
+            // Boss always drops something good
+            if (e.type === 'boss') {
+              const bossR = Math.random();
+              if (bossR < 0.33) { lootType = 'sword'; lootName = 'Espada Lendária'; }
+              else if (bossR < 0.66) { lootType = 'ring'; lootName = 'Anel de Poder'; }
+              else { lootType = 'boot'; lootName = 'Botas de Hermes'; }
+            } else {
+              if (r < 0.05) { lootType = 'chalice'; lootName = 'Cálice de Vida'; }
+              else if (r < 0.15) { lootType = 'sword'; lootName = 'Espada de Bronze'; }
+              else if (r < 0.30) { lootType = 'ring'; lootName = 'Anel de Velocidade'; }
+              else if (r < 0.45) { lootType = 'boot'; lootName = 'Bota de Mercúrio'; }
+              else if (r < 0.65) { lootType = 'gem'; lootName = 'Gema de Liderança'; }
+            }
             
             state.drops.push({
               x: e.x, y: e.y,
               type: lootType,
               name: lootName,
-              life: 600 // 10s
+              life: 1200 // 20s for boss loot or rare loot
             });
           }
         }
@@ -1581,7 +2025,7 @@ function initialState(): GameState {
           }
         }
         
-        return e.x > -80 && e.x < WIDTH + 80 && e.y > -80 && e.y < HEIGHT + 80;
+        return e.x > -100 && e.x < MAP_WIDTH + 100 && e.y > -100 && e.y < MAP_HEIGHT + 100;
       });
     }
 
@@ -1642,42 +2086,218 @@ function initialState(): GameState {
       }
     }
 
+    function collectDrop(drop: any, collector: any) {
+      if (drop.type === 'gold') state.player.gold += (drop.amount || 1);
+      else if (drop.type === 'wood') state.player.wood += (drop.amount || 3);
+      else if (drop.type === 'stone') state.player.stone += (drop.amount || 3);
+      else if (drop.type === 'fiber') state.player.fiber += (drop.amount || 3);
+      else if (drop.type === 'herb') {
+        const heal = state.player.maxHealth * 0.25;
+        state.player.health = Math.min(state.player.maxHealth, state.player.health + heal);
+        addEffect(state.player.x, state.player.y - 40, `+${Math.round(heal)} HP`, '#32cd32');
+      } else if (drop.type === 'chalice') {
+        state.player.maxHealth += 25;
+        state.player.health = state.player.maxHealth;
+        addEffect(state.player.x, state.player.y - 40, '+25 HP Máximo!', '#00bcd4');
+      } else if (drop.type === 'gem') {
+        state.constructions.helpers.forEach((h: any) => {
+          h.maxHp += 20;
+          h.hp += 20;
+          h.damage += 4;
+          addEffect(h.x, h.y - 20, 'Soldado Buff!', '#9c27b0');
+        });
+        addEffect(state.player.x, state.player.y - 40, 'Exército Fortalecido!', '#9c27b0');
+      } else if (drop.type === 'sword') {
+        state.player.damage += 5;
+        addEffect(state.player.x, state.player.y - 40, '+5 Dano!', '#ff9800');
+      } else if (drop.type === 'ring') {
+        state.player.speed += 0.2;
+        addEffect(state.player.x, state.player.y - 40, '+Velocidade!', '#2196f3');
+      } else if (drop.type === 'boot') {
+        state.player.speed += 0.3;
+        addEffect(state.player.x, state.player.y - 40, 'Super Velocidade!', '#4caf50');
+      }
+      addPulse(collector.x, collector.y, '#ffd700');
+    }
+
     function updateDefenders() {
-      // Dogs
-      for (const dog of state.constructions.dogs) {
-        dog.cooldown = Math.max(0, dog.cooldown - 1);
+      // Wolves
+      for (const wolf of state.constructions.wolves) {
+        wolf.cooldown = Math.max(0, wolf.cooldown - 1);
+        wolf.howlTimer = Math.max(0, (wolf.howlTimer || 0) - 1);
+        
+        // Wolves - Optimized with Spatial Grid
         let target = null;
-        let best = Infinity;
-        for (const enemy of state.enemies) {
-          const d = Math.hypot(dog.x - enemy.x, dog.y - enemy.y);
-          if (d < 250 && d < best) { best = d; target = enemy; }
+        let bestDistSq = 160000; // 400^2
+        const nearbyEnemies = getNearbyEnemies(wolf.x, wolf.y, 400);
+        for (let j = 0; j < nearbyEnemies.length; j++) {
+          const enemy = nearbyEnemies[j];
+          const dx = wolf.x - enemy.x;
+          const dy = wolf.y - enemy.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < bestDistSq) { bestDistSq = dSq; target = enemy; }
         }
 
         if (target) {
-          const ang = Math.atan2(target.y - dog.y, target.x - dog.x);
-          const dist = Math.hypot(target.x - dog.x, target.y - dog.y);
-          dog.facing = target.x < dog.x ? 'left' : 'right';
-          if (dist > 20) {
-            dog.x += Math.cos(ang) * dog.speed;
-            dog.y += Math.sin(ang) * dog.speed;
-            dog.walkTimer = (dog.walkTimer || 0) + 1;
-          } else if (dog.cooldown === 0) {
-            target.hp -= dog.damage;
+          const dx = target.x - wolf.x;
+          const dy = target.y - wolf.y;
+          const ang = Math.atan2(dy, dx);
+          const distSq = dx * dx + dy * dy;
+          wolf.facing = target.x < wolf.x ? 'left' : 'right';
+          wolf.isSitting = false;
+          
+          if (distSq > 1600) { // 40^2
+            const speed = wolf.speed * (wolf.cooldown > 0 ? 0.7 : 1.5); 
+            wolf.x += Math.cos(ang) * speed;
+            wolf.y += Math.sin(ang) * speed;
+            wolf.walkTimer = (wolf.walkTimer || 0) + 1;
+            
+            if (Math.random() < 0.01 && wolf.howlTimer === 0) {
+              addEffect(wolf.x, wolf.y - 20, "AUUUUU!", "#ccc");
+              wolf.howlTimer = 300;
+            }
+          } else if (wolf.cooldown === 0) {
+            // Lunge attack
+            wolf.x += Math.cos(ang) * 25;
+            wolf.y += Math.sin(ang) * 25;
+            
+            target.hp -= wolf.damage;
             target.hitFlash = 5;
-            target.vx += Math.cos(ang) * 5;
-            target.vy += Math.sin(ang) * 5;
-            dog.cooldown = 40;
-            addPulse(target.x, target.y, '#a1887f');
+            target.vx += Math.cos(ang) * 15;
+            target.vy += Math.sin(ang) * 15;
+            wolf.cooldown = 35;
+            addPulse(target.x, target.y, '#757575');
+            addEffect(target.x, target.y - 10, "MORDIDA!", "#ff1744");
           }
         } else {
-          // Patrol or return home
-          const distToHome = Math.hypot(dog.x - dog.homeX, dog.y - dog.homeY);
-          if (distToHome > 10) {
-            const ang = Math.atan2(dog.homeY - dog.y, dog.homeX - dog.x);
-            dog.x += Math.cos(ang) * (dog.speed * 0.5);
-            dog.y += Math.sin(ang) * (dog.speed * 0.5);
-            dog.facing = dog.homeX < dog.x ? 'left' : 'right';
-            dog.walkTimer = (dog.walkTimer || 0) + 1;
+          // Collect Resources
+          let bestDrop = null;
+          let bestDropDistSq = 250000; // 500^2
+          for (const drop of state.drops) {
+            if (drop.claimedBy && drop.claimedBy !== wolf) continue;
+            const dx = wolf.x - drop.x;
+            const dy = wolf.y - drop.y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < bestDropDistSq) {
+              bestDropDistSq = dSq;
+              bestDrop = drop;
+            }
+          }
+
+          if (bestDrop) {
+            bestDrop.claimedBy = wolf;
+            const dx = bestDrop.x - wolf.x;
+            const dy = bestDrop.y - wolf.y;
+            const ang = Math.atan2(dy, dx);
+            const distSq = dx * dx + dy * dy;
+            wolf.facing = bestDrop.x < wolf.x ? 'left' : 'right';
+            wolf.isSitting = false;
+
+            if (distSq > 100) {
+              wolf.x += Math.cos(ang) * (wolf.speed * 1.3);
+              wolf.y += Math.sin(ang) * (wolf.speed * 1.3);
+              wolf.walkTimer = (wolf.walkTimer || 0) + 1;
+            } else {
+              collectDrop(bestDrop, wolf);
+              addEffect(wolf.x, wolf.y - 20, "PEGUEI!", "#ffd700");
+              bestDrop.life = 0;
+            }
+          } else {
+            // Follow Player
+            const dx = state.player.x - wolf.x;
+            const dy = state.player.y - wolf.y;
+            const distSq = dx * dx + dy * dy;
+
+            if (distSq > 14400) { // 120^2
+              const ang = Math.atan2(dy, dx);
+              wolf.x += Math.cos(ang) * (wolf.speed * 0.9);
+              wolf.y += Math.sin(ang) * (wolf.speed * 0.9);
+              wolf.facing = state.player.x < wolf.x ? 'left' : 'right';
+              wolf.walkTimer = (wolf.walkTimer || 0) + 1;
+              wolf.isSitting = false;
+            } else {
+              wolf.isSitting = true;
+            }
+          }
+        }
+      }
+
+      // Falcons
+      for (const falcon of state.constructions.falcons) {
+        falcon.cooldown = Math.max(0, falcon.cooldown - 1);
+        falcon.flapTimer = (falcon.flapTimer || 0) + 1;
+        
+        // Falcons - Optimized with Spatial Grid
+        let target = null;
+        let bestDistSq = 360000; // 600^2 (Very high detection)
+        const nearbyEnemies = getNearbyEnemies(falcon.x, falcon.y, 600);
+        for (let j = 0; j < nearbyEnemies.length; j++) {
+          const enemy = nearbyEnemies[j];
+          const dx = falcon.x - enemy.x;
+          const dy = falcon.y - enemy.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < bestDistSq) { bestDistSq = dSq; target = enemy; }
+        }
+
+        if (target) {
+          const dx = target.x - falcon.x;
+          const dy = target.y - falcon.y;
+          const ang = Math.atan2(dy, dx);
+          const distSq = dx * dx + dy * dy;
+          falcon.facing = target.x < falcon.x ? 'left' : 'right';
+          
+          if (distSq > 400) { // 20^2
+            falcon.x += Math.cos(ang) * falcon.speed;
+            falcon.y += Math.sin(ang) * falcon.speed;
+          } else if (falcon.cooldown === 0) {
+            // Dive attack
+            target.hp -= falcon.damage;
+            target.hitFlash = 5;
+            falcon.cooldown = 25;
+            addEffect(target.x, target.y - 10, "RASANTE!", "#ffeb3b");
+          }
+        } else {
+          // Collect Resources (High priority for falcons)
+          let bestDrop = null;
+          let bestDropDistSq = 490000; // 700^2
+          for (const drop of state.drops) {
+            if (drop.claimedBy && drop.claimedBy !== falcon) continue;
+            const dx = falcon.x - drop.x;
+            const dy = falcon.y - drop.y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < bestDropDistSq) {
+              bestDropDistSq = dSq;
+              bestDrop = drop;
+            }
+          }
+
+          if (bestDrop) {
+            bestDrop.claimedBy = falcon;
+            const dx = bestDrop.x - falcon.x;
+            const dy = bestDrop.y - falcon.y;
+            const ang = Math.atan2(dy, dx);
+            const distSq = dx * dx + dy * dy;
+            falcon.facing = bestDrop.x < falcon.x ? 'left' : 'right';
+
+            if (distSq > 100) {
+              falcon.x += Math.cos(ang) * (falcon.speed * 1.5);
+              falcon.y += Math.sin(ang) * (falcon.speed * 1.5);
+            } else {
+              collectDrop(bestDrop, falcon);
+              addEffect(falcon.x, falcon.y - 20, "RESGATE!", "#fff");
+              bestDrop.life = 0;
+            }
+          } else {
+            // Circle Player
+            const t = performance.now() * 0.002;
+            const orbitX = state.player.x + Math.cos(t) * 60;
+            const orbitY = state.player.y + Math.sin(t) * 60;
+            const dx = orbitX - falcon.x;
+            const dy = orbitY - falcon.y;
+            const ang = Math.atan2(dy, dx);
+            falcon.x += Math.cos(ang) * (falcon.speed * 0.7);
+            falcon.y += Math.sin(ang) * (falcon.speed * 0.7);
+            falcon.facing = Math.cos(t) > 0 ? 'right' : 'left';
           }
         }
       }
@@ -1686,11 +2306,16 @@ function initialState(): GameState {
       for (const tower of state.constructions.towers) {
         tower.cooldown = Math.max(0, tower.cooldown - 1);
         if (tower.cooldown > 0) continue;
+        // Static Towers - Optimized with Spatial Grid
         let target = null;
-        let best = Infinity;
-        for (const enemy of state.enemies) {
-          const d = Math.hypot(tower.x - enemy.x, tower.y - enemy.y);
-          if (d < tower.range && d < best) { best = d; target = enemy; }
+        let bestDistSq = tower.range * tower.range;
+        const nearby = getNearbyEnemies(tower.x, tower.y, tower.range);
+        for (let i = 0; i < nearby.length; i++) {
+          const enemy = nearby[i];
+          const dx = tower.x - enemy.x;
+          const dy = tower.y - enemy.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < bestDistSq) { bestDistSq = dSq; target = enemy; }
         }
         if (target) {
           target.hp -= tower.damage;
@@ -1716,17 +2341,23 @@ function initialState(): GameState {
         let target = null;
         let newState = 'idle';
         
-        // Priority 1: Defend Base
-        const baseProtectionRadius = 250;
+        // Priority 1: Defend Base - Optimized with Spatial Grid
+        const baseProtectionRadiusSq = 62500; // 250^2
         let nearestEnemyNearBase = null;
-        let minDistBase = Infinity;
-        for (const enemy of state.enemies) {
+        let minDistSqBase = Infinity;
+        const nearbyEnemiesBase = getNearbyEnemies(state.campfire.x, state.campfire.y, 250);
+        for (let i = 0; i < nearbyEnemiesBase.length; i++) {
+          const enemy = nearbyEnemiesBase[i];
           if (claimedTargets.has(enemy)) continue;
-          const distToBase = Math.hypot(enemy.x - state.campfire.x, enemy.y - state.campfire.y);
-          if (distToBase < baseProtectionRadius) {
-            const distToHelper = Math.hypot(enemy.x - h.x, enemy.y - h.y);
-            if (distToHelper < minDistBase) {
-              minDistBase = distToHelper;
+          const dxBase = enemy.x - state.campfire.x;
+          const dyBase = enemy.y - state.campfire.y;
+          const distSqBase = dxBase * dxBase + dyBase * dyBase;
+          if (distSqBase < baseProtectionRadiusSq) {
+            const dxHelper = enemy.x - h.x;
+            const dyHelper = enemy.y - h.y;
+            const distSqHelper = dxHelper * dxHelper + dyHelper * dyHelper;
+            if (distSqHelper < minDistSqBase) {
+              minDistSqBase = distSqHelper;
               nearestEnemyNearBase = enemy;
             }
           }
@@ -1741,14 +2372,18 @@ function initialState(): GameState {
             h.speechCooldown = 300;
           }
         } else {
-          // Priority 2: Attack Enemies on Map
+          // Priority 2: Attack Enemies on Map - Optimized with Spatial Grid
           let nearestEnemy = null;
-          let minDistEnemy = Infinity;
-          for (const enemy of state.enemies) {
+          let minDistSqEnemy = Infinity;
+          const nearbyEnemiesMap = getNearbyEnemies(h.x, h.y, 600); // Vision radius of 600
+          for (let i = 0; i < nearbyEnemiesMap.length; i++) {
+            const enemy = nearbyEnemiesMap[i];
             if (claimedTargets.has(enemy)) continue;
-            const d = Math.hypot(h.x - enemy.x, h.y - enemy.y);
-            if (d < minDistEnemy) {
-              minDistEnemy = d;
+            const dx = h.x - enemy.x;
+            const dy = h.y - enemy.y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < minDistSqEnemy) {
+              minDistSqEnemy = dSq;
               nearestEnemy = enemy;
             }
           }
@@ -1764,12 +2399,14 @@ function initialState(): GameState {
           } else {
             // Priority 3: Collect Resources
             let nearestRes = null;
-            let minDistRes = Infinity;
+            let minDistSqRes = Infinity;
             for (const res of state.resources) {
               if (res.respawning || claimedTargets.has(res)) continue;
-              const d = Math.hypot(h.x - res.x, h.y - res.y);
-              if (d < minDistRes) {
-                minDistRes = d;
+              const dx = h.x - res.x;
+              const dy = h.y - res.y;
+              const dSq = dx * dx + dy * dy;
+              if (dSq < minDistSqRes) {
+                minDistSqRes = dSq;
                 nearestRes = res;
               }
             }
@@ -1802,19 +2439,37 @@ function initialState(): GameState {
 
         // Movement and Action
         if (target) {
-          const ang = Math.atan2(target.y - h.y, target.x - h.x);
-          const dist = Math.hypot(target.x - h.x, target.y - h.y);
+          const dx = target.x - h.x;
+          const dy = target.y - h.y;
+          const ang = Math.atan2(dy, dx);
+          const distSq = dx * dx + dy * dy;
           h.facing = target.x < h.x ? 'left' : 'right';
 
           let interactionDist = 25;
-          if (h.type === 'archer' || h.type === 'sniper') interactionDist = h.range * 0.8;
-          if (h.type === 'mage' || h.type === 'summoner') interactionDist = h.range * 0.7;
+          let kitingDist = 0;
+          if (h.type === 'archer' || h.type === 'sniper') {
+            interactionDist = h.range * 0.8;
+            kitingDist = h.range * 0.4;
+          }
+          if (h.type === 'mage' || h.type === 'summoner') {
+            interactionDist = h.range * 0.7;
+            kitingDist = h.range * 0.3;
+          }
           if (h.state === 'idle') interactionDist = 5;
 
-          if (dist > interactionDist) {
+          const interactionDistSq = interactionDist * interactionDist;
+          const kitingDistSq = kitingDist * kitingDist;
+
+          if (distSq > interactionDistSq) {
             const speed = h.state === 'idle' ? 1.5 : 2.5;
             h.x += Math.cos(ang) * speed;
             h.y += Math.sin(ang) * speed;
+            h.walkTimer = (h.walkTimer || 0) + 1;
+          } else if (distSq < kitingDistSq && (h.state === 'attacking' || h.state === 'defending')) {
+            // Kiting: Move away from enemy
+            const speed = 1.8;
+            h.x -= Math.cos(ang) * speed;
+            h.y -= Math.sin(ang) * speed;
             h.walkTimer = (h.walkTimer || 0) + 1;
           } else {
             h.walkTimer = 0;
@@ -1822,6 +2477,10 @@ function initialState(): GameState {
             if (h.state === 'defending' || h.state === 'attacking') {
               if (h.type === 'warrior') {
                 if (h.cooldown === 0) {
+                  // Warrior Lunge
+                  h.x += Math.cos(ang) * 10;
+                  h.y += Math.sin(ang) * 10;
+                  
                   target.hp -= h.damage;
                   target.hitFlash = 5;
                   target.vx += Math.cos(ang) * 4;
@@ -1853,9 +2512,14 @@ function initialState(): GameState {
                     type: 'cloud'
                   });
                   const aoeRange = h.level >= 3 ? 90 : 65;
-                  for (const e of state.enemies) {
-                    const ed = Math.hypot(target.x - e.x, target.y - e.y);
-                    if (ed < aoeRange) {
+                  const aoeRangeSq = aoeRange ** 2;
+                  const nearbyEnemies = getNearbyEnemies(target.x, target.y, aoeRange);
+                  for (let j = 0; j < nearbyEnemies.length; j++) {
+                    const e = nearbyEnemies[j];
+                    const edx = target.x - e.x;
+                    const edy = target.y - e.y;
+                    const edSq = edx * edx + edy * edy;
+                    if (edSq < aoeRangeSq) {
                       e.hp -= h.damage * 1.5;
                       e.hitFlash = 5;
                       if (h.level >= 4) {
@@ -1905,16 +2569,9 @@ function initialState(): GameState {
                 }
               }
             } else if (h.state === 'collecting') {
-              if (h.cooldown === 0) {
-                h.cooldown = 40;
-                const amount = 1 + Math.floor(h.level / 2);
-                if (target.type === 'wood') state.player.wood += amount;
-                else if (target.type === 'stone') state.player.stone += amount;
-                else if (target.type === 'fiber') state.player.fiber += amount;
-                else if (target.type === 'gold') state.player.gold += amount;
-                addEffect(target.x, target.y, `+${amount} ${target.type}`, '#8ed170');
-                target.respawning = true;
-                target.respawnTimer = 600;
+              // Actual collection is handled by autoCollectResources
+              // We just need to check if it was collected to return to idle
+              if (target.respawning) {
                 h.state = 'idle';
                 if (h.speechCooldown === 0) {
                   h.speechText = DIALOGUES.RETURNING[Math.floor(Math.random() * DIALOGUES.RETURNING.length)];
@@ -1936,11 +2593,13 @@ function initialState(): GameState {
       // Start Attack
       if (state.player.autoAttackTimer <= 0) {
         let nearest = null;
-        let bestDist = 100; // Search range slightly larger than hit range
+        let bestDistSq = 10000; // 100^2
         for (const e of state.enemies) {
-          const d = Math.hypot(state.player.x - e.x, state.player.y - e.y);
-          if (d < bestDist) {
-            bestDist = d;
+          const dx = state.player.x - e.x;
+          const dy = state.player.y - e.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < bestDistSq) {
+            bestDistSq = dSq;
             nearest = e;
           }
         }
@@ -1965,7 +2624,10 @@ function initialState(): GameState {
         const hitRange = 85;
         const hitArc = 1.4; // Radians (~80 degrees)
 
-        for (const e of state.enemies) {
+        // Player Attack - Optimized with Spatial Grid
+        const nearby = getNearbyEnemies(state.player.x, state.player.y, hitRange);
+        for (let i = 0; i < nearby.length; i++) {
+          const e = nearby[i];
           const d = Math.hypot(state.player.x - e.x, state.player.y - e.y);
           if (d < hitRange) {
             const angleToEnemy = Math.atan2(e.y - state.player.y, e.x - state.player.x);
@@ -1980,6 +2642,13 @@ function initialState(): GameState {
               
               e.hp -= dmg;
               e.hitFlash = 6;
+
+              // Boss damage feedback
+              if (e.type === 'boss') {
+                addParticles(e.x, e.y, '#ffd700', 12);
+                triggerShake(isCrit ? 12 : 6);
+              }
+
               const kb = isCrit ? 12 : 8;
               e.vx += Math.cos(state.player.attackAngle) * kb;
               e.vy += Math.sin(state.player.attackAngle) * kb;
@@ -2060,20 +2729,54 @@ function initialState(): GameState {
       state.frame++;
       if (state.status !== 'playing') return;
 
+      // Update spatial grid at the start of each frame
+      updateSpatialGrid();
+
       // Wave Timer Logic
       state.waveTimer = Math.max(0, state.waveTimer - 1);
       if (state.waveTimer <= 0) {
         if (state.isWaveActive) {
           // Combat ended, start preparation
           state.isWaveActive = false;
-          state.waveTimer = 15 * 60; // 15 seconds prep
-          showQuestMessage('Onda finalizada! Prepare-se para a próxima.', 3000);
+          
+          // Give rewards if it was a boss wave
+          giveWaveRewards(state.wave);
+          
+          const nextWave = state.wave + 1;
+          const isBossNext = nextWave % 5 === 0;
+          const isMilestoneNext = nextWave % 10 === 0;
+          
+          // 15 seconds prep normally, 30 seconds for boss
+          state.waveTimer = isBossNext ? 30 * 60 : 15 * 60; 
+          
+          if (isBossNext) {
+            const warning = isMilestoneNext ? 'ALERTA MÁXIMO: UM GRANDE GUARDIÃO SE APROXIMA!' : 'ALERTA: UMA CRIATURA PODEROSA FOI AVISTADA!';
+            showQuestMessage(warning, 6000);
+            triggerShake(12);
+          } else {
+            showQuestMessage('Onda finalizada! Prepare-se para a próxima.', 3000);
+          }
         } else {
           // Preparation ended, start combat
           state.isWaveActive = true;
-          state.waveTimer = 60 * 60; // 60 seconds combat
           state.wave += 1;
-          showQuestMessage(`Onda ${state.wave} iniciada!`, 3000);
+          
+          const isBossWave = state.wave % 5 === 0;
+          const isDense = state.wave % 4 === 0;
+          const isFast = state.wave % 3 === 0;
+          
+          // 60 seconds combat normally, 90 seconds for boss
+          state.waveTimer = isBossWave ? 90 * 60 : 60 * 60; 
+          
+          if (isBossWave) {
+            showQuestMessage(`ALERTA: CHEFE DA ONDA ${state.wave} SURGIU!`, 5000);
+            triggerShake(15);
+          } else {
+            let msg = `Onda ${state.wave} iniciada!`;
+            if (isDense) msg = `Onda ${state.wave}: HORDA DENSA!`;
+            else if (isFast) msg = `Onda ${state.wave}: ATAQUE RÁPIDO!`;
+            showQuestMessage(msg, 3000);
+          }
         }
       }
 
@@ -2092,43 +2795,15 @@ function initialState(): GameState {
       updateProjectiles();
       updatePlayerCombat();
       updateEffects();
+      updateCamera();
       state.cameraShake *= 0.88;
-
-      // Multiplayer Sync
-      if (socketRef.current && state.isJoined) {
-        socketRef.current.emit('player-update', {
-          roomId: state.roomId,
-          x: state.player.x,
-          y: state.player.y,
-          health: state.player.health,
-          maxHealth: state.player.maxHealth,
-          facing: state.player.facing,
-          frame: state.player.frame
-        });
-
-        if (state.isHost && state.frame % 10 === 0) {
-          socketRef.current.emit('sync-game-state', {
-            roomId: state.roomId,
-            enemies: state.enemies,
-            drops: state.drops,
-            resources: state.resources,
-            constructions: state.constructions,
-            projectiles: state.projectiles,
-            timeOfDay: state.timeOfDay,
-            day: state.day
-          });
-        }
-      }
 
       autoCollectResources();
       
-      // Only host handles spawning and world updates (or single player)
-      if (!state.isJoined || state.isHost) {
-        spawnEnemy();
-        updateEnemies();
-        updateDrops();
-        updateDefenders();
-      }
+      spawnEnemy();
+      updateEnemies();
+      updateDrops();
+      updateDefenders();
       
       updateSummons();
 
@@ -2143,12 +2818,24 @@ function initialState(): GameState {
       updateUI();
     }
 
+    function drawShadow(x: number, y: number, radius: number) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 2, radius, radius * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    let groundGradient: CanvasGradient | null = null;
     function drawGround() {
-      const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-      grad.addColorStop(0, '#1e2b1b');
-      grad.addColorStop(1, '#111a10');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      if (!groundGradient) {
+        groundGradient = ctx.createLinearGradient(0, 0, 0, MAP_HEIGHT);
+        groundGradient.addColorStop(0, '#1e2b1b');
+        groundGradient.addColorStop(1, '#111a10');
+      }
+      ctx.fillStyle = groundGradient;
+      ctx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
 
       // Grass tufts
       state.grass.forEach(g => {
@@ -2169,18 +2856,18 @@ function initialState(): GameState {
 
       // Dirt patches
       ctx.fillStyle = 'rgba(79, 54, 33, 0.06)';
-      for (let i = 0; i < 15; i++) {
-        const x = (i * 137 + 40) % WIDTH;
-        const y = (i * 183 + 120) % HEIGHT;
+      for (let i = 0; i < 30; i++) {
+        const x = (i * 137 + 40) % MAP_WIDTH;
+        const y = (i * 183 + 120) % MAP_HEIGHT;
         ctx.beginPath();
         ctx.ellipse(x, y, 60, 22, 0.4, 0, Math.PI * 2);
         ctx.fill();
       }
 
       // Small stones and wood debris
-      for (let i = 0; i < 20; i++) {
-        const x = (i * 197 + 100) % WIDTH;
-        const y = (i * 223 + 50) % HEIGHT;
+      for (let i = 0; i < 40; i++) {
+        const x = (i * 197 + 100) % MAP_WIDTH;
+        const y = (i * 223 + 50) % MAP_HEIGHT;
         if (i % 2 === 0) {
           // Tiny stone
           ctx.fillStyle = 'rgba(128, 128, 116, 0.2)';
@@ -2195,10 +2882,7 @@ function initialState(): GameState {
 
     function drawTree(x: number, y: number, s: number) {
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.32)';
-      ctx.beginPath();
-      ctx.ellipse(x, y + 20 * s, 26 * s, 10 * s, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(x, y + 18 * s, 26 * s);
       
       // Trunk
       ctx.fillStyle = '#2a1a0f'; // Shadow side
@@ -2241,10 +2925,7 @@ function initialState(): GameState {
 
     function drawBush(x: number, y: number, s: number) {
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.beginPath();
-      ctx.ellipse(x, y + 10 * s, 20 * s, 7 * s, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(x, y + 8 * s, 20 * s);
       
       // Bush layers
       ctx.fillStyle = '#1a331c'; // Darker
@@ -2273,10 +2954,7 @@ function initialState(): GameState {
 
     function drawRock(x: number, y: number, s: number) {
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
-      ctx.beginPath();
-      ctx.ellipse(x, y + 10 * s, 16 * s, 6 * s, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(x, y + 8 * s, 16 * s);
       
       // Rock body (shading)
       ctx.fillStyle = '#40403a'; // Darkest
@@ -2328,67 +3006,109 @@ function initialState(): GameState {
       const flicker = Math.sin(t * 0.95) * 2.1;
       const level = fire.level || 1;
 
-      // Glow
-      const glowRange = 42 + (level * 10) + flicker;
+      // Light Radius Ring (Visual Protection Area)
+      const levelData = CAMPFIRE_LEVELS.find(l => l.level === level) || CAMPFIRE_LEVELS[0];
+      const lightRadius = levelData.lightRadius;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 200, 100, 0.12)';
+      ctx.setLineDash([15, 15]);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(fire.x, fire.y, lightRadius, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      // Protection Aura Pulse
+      const auraPulse = (Math.sin(performance.now() * 0.002) * 0.5 + 0.5) * 0.05;
+      ctx.fillStyle = `rgba(255, 200, 100, ${auraPulse})`;
+      ctx.fill();
+      ctx.restore();
+
+      // Organic Glow
+      const glowRange = 70 + (level * 20) + flicker;
       const glow = ctx.createRadialGradient(fire.x, fire.y, 0, fire.x, fire.y, glowRange);
-      glow.addColorStop(0, 'rgba(255,180,83,0.32)');
-      glow.addColorStop(0.55, 'rgba(229,114,43,0.16)');
-      glow.addColorStop(1, 'rgba(229,114,43,0)');
+      glow.addColorStop(0, 'rgba(255, 160, 60, 0.45)');
+      glow.addColorStop(0.4, 'rgba(255, 90, 30, 0.2)');
+      glow.addColorStop(1, 'rgba(255, 50, 0, 0)');
+      
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
       ctx.fillStyle = glow;
       ctx.beginPath();
       ctx.arc(fire.x, fire.y, glowRange, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
 
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      // Shadow under fire
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.beginPath();
-      ctx.ellipse(fire.x, fire.y + 18, 28 + level * 4, 11 + level * 2, 0, 0, Math.PI * 2);
+      ctx.ellipse(fire.x, fire.y + 18, 30 + level * 5, 12 + level * 3, 0, 0, Math.PI * 2);
       ctx.fill();
 
+      // Base Altar (for higher levels)
+      if (level >= 4) {
+        ctx.fillStyle = '#333';
+        ctx.beginPath();
+        ctx.roundRect(fire.x - 30 - level, fire.y - 10, 60 + level * 2, 30, 8);
+        ctx.fill();
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
       // Stones around the fire
-      const stoneCount = 6 + level * 2;
+      const stoneCount = 8 + level * 2;
       for (let i = 0; i < stoneCount; i++) {
         const ang = (i / stoneCount) * Math.PI * 2;
-        const dist = 22 + level * 2;
+        const dist = 24 + level * 3;
         const sx = fire.x + Math.cos(ang) * dist;
         const sy = fire.y + Math.sin(ang) * dist;
         ctx.fillStyle = i % 2 === 0 ? '#4a4a4a' : '#616161';
         ctx.beginPath();
-        ctx.ellipse(sx, sy, 6, 4, ang, 0, Math.PI * 2);
+        ctx.ellipse(sx, sy, 7, 5, ang, 0, Math.PI * 2);
         ctx.fill();
+        
+        // Magical runes on stones at high level
+        if (level >= 6) {
+          ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
+          ctx.fillRect(sx - 1, sy - 1, 2, 2);
+        }
       }
 
       // Logs
       ctx.fillStyle = '#3a2515'; 
       ctx.save();
       ctx.translate(fire.x, fire.y + 8);
-      const logCount = 2 + Math.floor(level / 2);
+      const logCount = 3 + Math.floor(level / 2);
       for (let i = 0; i < logCount; i++) {
         ctx.rotate((Math.PI * 2) / logCount);
-        ctx.fillRect(-16 - level, -3, 32 + level * 2, 6);
+        ctx.fillRect(-18 - level, -4, 36 + level * 2, 8);
       }
       ctx.restore();
 
       // Flames (Pixelated style)
-      const flameCount = 3 + level;
+      const flameCount = 4 + level;
       for (let i = 0; i < flameCount; i++) {
         const ft = t + i * 1.5;
-        const fx = fire.x + Math.sin(ft * 0.6) * (5 + level);
-        const fy = fire.y - 4 - i * 7 + Math.cos(ft * 0.9) * 4;
-        const fs = 14 - i * 2 + flicker + level;
+        const fx = fire.x + Math.sin(ft * 0.6) * (6 + level);
+        const fy = fire.y - 5 - i * 8 + Math.cos(ft * 0.9) * 5;
+        const fSize = (10 + level * 2) * (1 - i / flameCount);
         
-        ctx.fillStyle = i === 0 ? '#ff4d00' : i === 1 ? '#ff9500' : i === 2 ? '#ffea00' : '#ffffff';
+        ctx.fillStyle = i === 0 ? '#ffffff' : i < 3 ? '#ffeb3b' : i < 6 ? '#ff9800' : '#f44336';
         ctx.beginPath();
-        ctx.moveTo(fx - fs, fy);
-        ctx.lineTo(fx, fy - fs * (2.2 + level * 0.1));
-        ctx.lineTo(fx + fs, fy);
-        ctx.closePath();
+        ctx.roundRect(fx - fSize/2, fy - fSize/2, fSize, fSize, 2);
         ctx.fill();
-      }
 
-      // Sparks
-      if (Math.random() > 0.85) {
-        addParticles(fire.x + (Math.random() - 0.5) * 20, fire.y, '#ffea00', 1);
+        // Embers
+        if (Math.random() < 0.1) {
+          state.particles.push({
+            x: fx, y: fy,
+            vx: (Math.random() - 0.5) * 2,
+            vy: -Math.random() * 3 - 1,
+            life: 1,
+            color: '#ff9800',
+            size: Math.random() * 3 + 1
+          });
+        }
       }
     }
 
@@ -2415,7 +3135,9 @@ function initialState(): GameState {
 
       // Details (Posts)
       ctx.fillStyle = level >= 2 ? '#5f4630' : '#8b5a39';
-      const dist = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+      const dx = seg.x2 - seg.x1;
+      const dy = seg.y2 - seg.y1;
+      const dist = Math.sqrt(dx * dx + dy * dy);
       const posts = Math.floor(dist / 16);
       for (let i = 0; i <= posts; i++) {
         const t = i / posts;
@@ -2463,10 +3185,7 @@ function initialState(): GameState {
       const level = t.level || 1;
       
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
-      ctx.beginPath();
-      ctx.ellipse(t.x, t.y + 22, 20, 8, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(t.x, t.y + 18, 20);
 
       // Base
       ctx.fillStyle = level >= 2 ? '#5a5a54' : '#846849';
@@ -2522,41 +3241,118 @@ function initialState(): GameState {
       ctx.fillRect(t.x - 14, t.y - 54, 28 * (t.hp / t.maxHp), 4);
     }
 
-    function drawDog(dog: any) {
-      const { x, y, facing, walkTimer } = dog;
-      const bounce = Math.abs(Math.sin(walkTimer * 0.2)) * 3;
+    function drawWolf(wolf: any) {
+      const { x, y, facing, walkTimer, isSitting } = wolf;
+      const bounce = isSitting ? 0 : Math.abs(Math.sin(walkTimer * 0.2)) * 3;
+      const tailWag = Math.sin(performance.now() * 0.015) * 0.4;
       
       ctx.save();
       ctx.translate(x, y - bounce);
       if (facing === 'left') ctx.scale(-1, 1);
 
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
-      ctx.beginPath();
-      ctx.ellipse(0, bounce + 10, 12, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(0, bounce + 10, 16);
 
-      // Body
-      ctx.fillStyle = '#8d6e63';
-      ctx.fillRect(-10, -8, 20, 10);
+      // Body (Grey/Silver Wolf)
+      ctx.fillStyle = '#757575';
+      if (isSitting) {
+        ctx.fillRect(-10, -4, 20, 16); 
+      } else {
+        ctx.fillRect(-14, -10, 28, 14);
+      }
       
-      // Head
-      ctx.fillStyle = '#795548';
-      ctx.fillRect(6, -14, 8, 8);
+      // Fur details
+      ctx.fillStyle = '#9e9e9e';
+      ctx.fillRect(-10, -10, 20, 4);
       
-      // Ears
-      ctx.fillStyle = '#5d4037';
-      ctx.fillRect(10, -16, 4, 4);
+      // Head (Longer snout)
+      ctx.fillStyle = '#616161';
+      const headY = isSitting ? -12 : -18;
+      ctx.fillRect(8, headY, 12, 10); // Snout
+      ctx.fillStyle = '#424242';
+      ctx.fillRect(16, headY + 2, 4, 3); // Nose
       
-      // Tail
-      ctx.fillStyle = '#8d6e63';
-      ctx.fillRect(-14, -6, 4, 4);
+      // Ears (Pointy)
+      ctx.fillStyle = '#212121';
+      ctx.beginPath();
+      ctx.moveTo(8, headY);
+      ctx.lineTo(12, headY - 8);
+      ctx.lineTo(16, headY);
+      ctx.fill();
+      
+      // Tail (Bushy)
+      ctx.save();
+      ctx.translate(-14, isSitting ? 8 : -4);
+      ctx.rotate(tailWag);
+      ctx.fillStyle = '#757575';
+      ctx.beginPath();
+      ctx.ellipse(-6, 0, 10, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
 
       // Legs
-      ctx.fillStyle = '#5d4037';
-      const legOffset = Math.sin(walkTimer * 0.2) * 4;
-      ctx.fillRect(-8, 2, 4, 4 + legOffset);
-      ctx.fillRect(4, 2, 4, 4 - legOffset);
+      ctx.fillStyle = '#212121';
+      if (isSitting) {
+        ctx.fillRect(-8, 12, 5, 5);
+        ctx.fillRect(3, 12, 5, 5);
+      } else {
+        const legOffset = Math.sin(walkTimer * 0.2) * 6;
+        ctx.fillRect(-12, 4, 5, 6 + legOffset);
+        ctx.fillRect(6, 4, 5, 6 - legOffset);
+      }
+
+      ctx.restore();
+    }
+
+    function drawFalcon(falcon: any) {
+      const { x, y, facing, flapTimer, altitude } = falcon;
+      const wingFlap = Math.sin(flapTimer * 0.3) * 15;
+      
+      ctx.save();
+      ctx.translate(x, y - altitude);
+      if (facing === 'left') ctx.scale(-1, 1);
+
+      // Shadow (on ground)
+      ctx.save();
+      ctx.translate(0, altitude);
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 12, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Body
+      ctx.fillStyle = '#5d4037'; // Brown
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 10, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Wings
+      ctx.fillStyle = '#3e2723';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-15, - wingFlap);
+      ctx.lineTo(-5, 5);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(15, - wingFlap);
+      ctx.lineTo(5, 5);
+      ctx.fill();
+
+      // Head
+      ctx.fillStyle = '#795548';
+      ctx.beginPath();
+      ctx.arc(8, -2, 5, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Beak
+      ctx.fillStyle = '#ffd700';
+      ctx.beginPath();
+      ctx.moveTo(12, -2);
+      ctx.lineTo(16, 0);
+      ctx.lineTo(12, 2);
+      ctx.fill();
 
       ctx.restore();
     }
@@ -2703,21 +3499,6 @@ function initialState(): GameState {
         ctx.restore();
       }
 
-      // Shield for Warrior
-      if (h.type === 'warrior') {
-        ctx.save();
-        ctx.translate(h.x + (h.facing === 'left' ? 10 : -10), h.y + 6 + bob);
-        ctx.fillStyle = '#ffd700';
-        ctx.beginPath();
-        ctx.arc(0, 0, 7, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = bodyColor;
-        ctx.beginPath();
-        ctx.arc(0, 0, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
-
       // Weapon
       ctx.save();
       const weaponX = h.facing === 'left' ? -12 : 12;
@@ -2810,10 +3591,25 @@ function initialState(): GameState {
 
     function drawResource(res: any) {
       if (res.respawning) return;
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
-      ctx.beginPath();
-      ctx.ellipse(res.x, res.y + 10, 12, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
+
+      const dx = state.player.x - res.x;
+      const dy = state.player.y - res.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < 6400) { // 80px radius
+        ctx.save();
+        ctx.globalAlpha = (1 - Math.sqrt(distSq) / 80) * 0.4;
+        const glow = ctx.createRadialGradient(res.x, res.y, 0, res.x, res.y, 15);
+        glow.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+        glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(res.x, res.y, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      drawShadow(res.x, res.y + 8, 12);
+      
       if (res.type === 'egg') {
         ctx.save();
         ctx.translate(res.x, res.y);
@@ -2859,10 +3655,7 @@ function initialState(): GameState {
       const bob = p.frame === 1 ? 2 : 0;
       
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.beginPath();
-      ctx.ellipse(p.x, p.y + 18, 14, 6, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(p.x, p.y + 16, 14);
 
       if (p.hitFlash > 0) {
         ctx.fillStyle = '#ffffff';
@@ -2870,6 +3663,10 @@ function initialState(): GameState {
         return;
       }
 
+      // Outline for legibility
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth = 1.5;
+      
       // Red Cape (Behind)
       ctx.fillStyle = '#b22222'; // Firebrick
       ctx.beginPath();
@@ -2878,10 +3675,12 @@ function initialState(): GameState {
       ctx.lineTo(p.x + 16, p.y + 20 + bob);
       ctx.lineTo(p.x - 16, p.y + 20 + bob);
       ctx.fill();
+      ctx.stroke();
 
       // Body (Cobalt Blue Tunic)
       ctx.fillStyle = '#0047AB'; // Cobalt Blue
       ctx.fillRect(p.x - 10, p.y - 2 + bob, 20, 24);
+      ctx.strokeRect(p.x - 10, p.y - 2 + bob, 20, 24);
       
       // Belt & Details
       ctx.fillStyle = '#3e2723';
@@ -2964,15 +3763,18 @@ function initialState(): GameState {
         
         const arcProgress = (1 - p.attackTimer / 14);
         
-        // Slash Arc (White with glow)
+        // Slash Arc (White with glow - Optimized for mobile)
         ctx.beginPath();
-        ctx.strokeStyle = `rgba(255, 255, 255, ${Math.sin(arcProgress * Math.PI)})`;
-        ctx.lineWidth = 8 - arcProgress * 4;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#fff';
+        ctx.strokeStyle = `rgba(255, 255, 255, ${Math.sin(arcProgress * Math.PI) * 0.5})`;
+        ctx.lineWidth = 12 - arcProgress * 6;
         ctx.arc(0, 0, 42 + arcProgress * 12, -1.4, 1.4);
         ctx.stroke();
-        ctx.shadowBlur = 0;
+        
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${Math.sin(arcProgress * Math.PI)})`;
+        ctx.lineWidth = 4 - arcProgress * 2;
+        ctx.arc(0, 0, 42 + arcProgress * 12, -1.4, 1.4);
+        ctx.stroke();
         
         // Sword (DQ Style)
         ctx.rotate(arcProgress * 3.2 - 1.6);
@@ -3066,10 +3868,7 @@ function initialState(): GameState {
       }
       
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
-      ctx.beginPath();
-      ctx.ellipse(e.x, e.y + 16 * s, 14 * s, 6 * s, 0, 0, Math.PI * 2);
-      ctx.fill();
+      drawShadow(e.x, e.y + 14 * s, 14 * s);
 
       if (e.hitFlash > 0) {
         ctx.fillStyle = '#ffffff';
@@ -3077,6 +3876,40 @@ function initialState(): GameState {
         ctx.arc(e.x, e.y, 18 * s, 0, Math.PI * 2);
         ctx.fill();
         return;
+      }
+
+      // Outline for legibility
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = 1.2 * s;
+
+      // Boss Glow & Telegraph
+      if (e.type === 'boss') {
+        // Enraged pulse
+        const isEnraged = e.hp < e.maxHp * 0.5;
+        const pulse = isEnraged ? Math.sin(performance.now() * 0.01) * 10 : 0;
+        
+        ctx.globalAlpha = 0.2 + (isEnraged ? 0.1 : 0);
+        ctx.fillStyle = isEnraged ? '#ff0000' : '#ffd700';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, (40 + pulse) * s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+
+        // Telegraph circle
+        if (e.prepStomp > 0) {
+          const progress = e.prepStomp / 45;
+          ctx.strokeStyle = '#ff0000';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, 120 * progress, 0, Math.PI * 2);
+          ctx.stroke();
+          
+          // Warning fill
+          ctx.globalAlpha = 0.3 * progress;
+          ctx.fillStyle = '#ff0000';
+          ctx.fill();
+          ctx.globalAlpha = 1.0;
+        }
       }
 
       if (e.slowTimer > 0) {
@@ -3260,7 +4093,7 @@ function initialState(): GameState {
           ctx.fill();
         }
       }
-      
+
       // Health Bar
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(e.x - 12 * s, e.y - 25 * s, 24 * s, 4);
@@ -3273,34 +4106,42 @@ function initialState(): GameState {
       ctx.beginPath();
       ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
       ctx.fill();
-      // Glow
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = p.color || '#fff';
+      
+      // Simplified Glow (No shadowBlur)
+      ctx.globalAlpha = 0.3;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
       ctx.fill();
-      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1.0;
     }
 
     function drawEffects() {
+      // Optimized draw loop: minimize save/restore and context changes
+      ctx.save();
       for (const p of state.particles) {
-        ctx.save();
         ctx.globalAlpha = p.life;
         ctx.fillStyle = p.color;
+        
         if (p.type === 'slash') {
+          // Use a nested save/restore only for transformations, but re-apply alpha if needed
+          // Actually, it's better to just translate/rotate and then manually undo or use save/restore correctly
+          ctx.save();
           ctx.translate(p.x, p.y);
           ctx.rotate(Math.PI / 4);
+          ctx.globalAlpha = p.life; // Re-apply alpha inside save block
           ctx.fillRect(-p.size / 2, -2, p.size, 4);
+          ctx.restore();
         } else if (p.type === 'cloud' || p.color === '#ffffff') {
-          // Death smoke puff
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
           ctx.fill();
         } else {
           ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
         }
-        ctx.restore();
       }
+      ctx.restore();
+      
+      // Ensure alpha is reset for text effects
       ctx.globalAlpha = 1;
 
       for (const e of state.effects) {
@@ -3323,15 +4164,13 @@ function initialState(): GameState {
     }
 
     function drawAmbientParticles() {
+      ctx.save();
+      ctx.globalAlpha = 0.3;
       for (const ap of state.ambientParticles) {
-        ctx.save();
-        ctx.globalAlpha = 0.4;
         ctx.fillStyle = ap.color;
-        ctx.translate(ap.x, ap.y);
-        ctx.rotate(performance.now() * 0.002);
-        ctx.fillRect(-ap.size / 2, -ap.size / 2, ap.size, ap.size);
-        ctx.restore();
+        ctx.fillRect(ap.x - ap.size / 2, ap.y - ap.size / 2, ap.size, ap.size);
       }
+      ctx.restore();
     }
 
     function drawWeather() {
@@ -3386,7 +4225,10 @@ function initialState(): GameState {
 
         let target = null;
         let best = Infinity;
-        for (const enemy of state.enemies) {
+        // Summons Targeting - Optimized with Spatial Grid
+        const nearby = getNearbyEnemies(s.x, s.y, 300);
+        for (let j = 0; j < nearby.length; j++) {
+          const enemy = nearby[j];
           const d = Math.hypot(s.x - enemy.x, s.y - enemy.y);
           if (d < 300 && d < best) { best = d; target = enemy; }
         }
@@ -3410,6 +4252,8 @@ function initialState(): GameState {
 
     function drawSummon(s: any) {
       const bob = Math.sin(performance.now() * 0.01) * 3;
+      drawShadow(s.x, s.y + 12, 10);
+      
       if (s.type === 'golem') {
         // Golem Drawing
         ctx.fillStyle = '#78909c'; // Stone color
@@ -3439,12 +4283,25 @@ function initialState(): GameState {
       }
     }
 
+    let vignetteGradient: CanvasGradient | null = null;
     function drawForestEdges() {
-      const darkness = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, 130, WIDTH / 2, HEIGHT / 2, 510);
-      darkness.addColorStop(0, 'rgba(0,0,0,0)');
-      darkness.addColorStop(1, 'rgba(2, 7, 3, 0.44)');
-      ctx.fillStyle = darkness;
+      // Vignette (Cached for performance)
+      if (!vignetteGradient) {
+        vignetteGradient = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, WIDTH * 0.2, WIDTH / 2, HEIGHT / 2, WIDTH * 0.8);
+        vignetteGradient.addColorStop(0, 'rgba(0,0,0,0)');
+        vignetteGradient.addColorStop(1, 'rgba(2, 7, 3, 0.5)');
+      }
+      ctx.fillStyle = vignetteGradient;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      
+      // Subtle screen grain
+      ctx.save();
+      ctx.globalAlpha = 0.02;
+      for(let i=0; i<10; i++) {
+        ctx.fillStyle = Math.random() > 0.5 ? '#fff' : '#000';
+        ctx.fillRect(Math.random() * WIDTH, Math.random() * HEIGHT, 1, 1);
+      }
+      ctx.restore();
     }
 
     function drawFog() {
@@ -3468,44 +4325,55 @@ function initialState(): GameState {
 
     function drawDayNight() {
       const t = Math.sin(state.timeOfDay * Math.PI * 2 - Math.PI / 2) * 0.5 + 0.5;
+      if (t < 0.05) return;
+
+      const levelData = CAMPFIRE_LEVELS.find(l => l.level === state.campfire.level) || CAMPFIRE_LEVELS[0];
+      const lightRadius = levelData.lightRadius;
+      const alpha = t * 0.7; // Max darkness opacity
+
+      ctx.save();
       
-      // Base darkness
-      ctx.fillStyle = `rgba(12, 22, 28, ${t * 0.5})`;
-      ctx.fillRect(0, 0, WIDTH, HEIGHT);
-      
-      // Moonlight/Campfire light during night
-      if (t > 0.15) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'destination-out';
+      // Calculate campfire position on screen
+      const screenX = state.campfire.x - camera.x;
+      const screenY = state.campfire.y - camera.y;
+
+      // 1. Draw the darkness overlay with a circular hole
+      // We use a path with a rectangle and a counter-clockwise circle to create a hole
+      ctx.fillStyle = `rgba(10, 15, 25, ${alpha})`;
+      ctx.beginPath();
+      ctx.rect(0, 0, WIDTH, HEIGHT);
+      ctx.arc(screenX, screenY, lightRadius, 0, Math.PI * 2, true);
+      ctx.fill();
+
+      // 2. Add a smooth gradient transition at the edge of the light
+      // Simplified for mobile: only create gradient if alpha is significant
+      if (alpha > 0.1) {
+        const grad = ctx.createRadialGradient(screenX, screenY, lightRadius * 0.5, screenX, screenY, lightRadius);
+        grad.addColorStop(0, 'rgba(10, 15, 25, 0)');
+        grad.addColorStop(1, `rgba(10, 15, 25, ${alpha})`);
         
-        // Light around campfire
-        const campLight = ctx.createRadialGradient(state.campfire.x, state.campfire.y, 20, state.campfire.x, state.campfire.y, 180);
-        campLight.addColorStop(0, `rgba(255, 200, 100, ${t * 0.7})`);
-        campLight.addColorStop(1, 'rgba(255, 200, 100, 0)');
-        ctx.fillStyle = campLight;
-        ctx.fillRect(0, 0, WIDTH, HEIGHT);
-        
-        // Light around player
-        const playerLight = ctx.createRadialGradient(state.player.x, state.player.y, 10, state.player.x, state.player.y, 120);
-        playerLight.addColorStop(0, `rgba(255, 255, 255, ${t * 0.4})`);
-        playerLight.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        ctx.fillStyle = playerLight;
-        ctx.fillRect(0, 0, WIDTH, HEIGHT);
-        
-        ctx.restore();
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(screenX, screenY, lightRadius, 0, Math.PI * 2);
+        ctx.fill();
       }
+      
+      ctx.restore();
     }
 
     function render() {
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
+      
       ctx.save();
+      // Apply camera translation
+      ctx.translate(-camera.x, -camera.y);
+
       if (state.cameraShake > 0) {
         ctx.translate((Math.random() - 0.5) * state.cameraShake, (Math.random() - 0.5) * state.cameraShake);
       }
 
       drawGround();
       drawAmbientParticles();
-      drawFog();
 
       // Collect all objects for depth sorting
       const objects: any[] = [
@@ -3516,7 +4384,8 @@ function initialState(): GameState {
         { y: state.campfire.y, draw: () => drawCampfire() },
         ...state.constructions.fenceSegments.map(seg => ({ y: (seg.y1 + seg.y2) / 2, draw: () => drawFenceSegment(seg) })),
         ...state.constructions.towers.map(t => ({ y: t.y, draw: () => drawTower(t) })),
-        ...state.constructions.dogs.map(d => ({ y: d.y, draw: () => drawDog(d) })),
+        ...state.constructions.wolves.map(w => ({ y: w.y, draw: () => drawWolf(w) })),
+        ...state.constructions.falcons.map(f => ({ y: f.y, draw: () => drawFalcon(f) })),
         ...state.constructions.helpers.map(h => ({ y: h.y, draw: () => drawHelper(h) })),
         ...state.summons.map(s => ({ y: s.y, draw: () => drawSummon(s) })),
         ...state.resources.map(res => ({ y: res.y, draw: () => drawResource(res) })),
@@ -3532,16 +4401,13 @@ function initialState(): GameState {
       // Draw sorted objects
       objects.forEach(obj => obj.draw());
 
-      // Draw Remote Players
-      Object.entries(state.remotePlayers).forEach(([id, p]: [string, any]) => {
-        drawOtherPlayer({ ...p, id });
-      });
-
       drawEffects();
       drawWeather();
+      
+      ctx.restore();
+
       drawForestEdges();
       drawDayNight();
-      ctx.restore();
     }
 
     function gameLoop() {
@@ -3567,6 +4433,14 @@ function initialState(): GameState {
       ui.upgradeBtn?.removeEventListener('click', handleUpgrade);
       ui.repairBtn?.removeEventListener('touchstart', handleRepair);
       ui.repairBtn?.removeEventListener('click', handleRepair);
+      
+      ui.rewardAtk?.removeEventListener('click', handleRewardAtk);
+      ui.rewardAtk?.removeEventListener('touchstart', handleRewardAtk);
+      ui.rewardDef?.removeEventListener('click', handleRewardDef);
+      ui.rewardDef?.removeEventListener('touchstart', handleRewardDef);
+      ui.rewardEco?.removeEventListener('click', handleRewardEco);
+      ui.rewardEco?.removeEventListener('touchstart', handleRewardEco);
+
       document.getElementById('startBtn')?.removeEventListener('touchstart', handleStart);
       document.getElementById('startBtn')?.removeEventListener('click', handleStart);
       document.getElementById('restartBtn')?.removeEventListener('click', handleRestart);
@@ -3582,7 +4456,7 @@ function initialState(): GameState {
       ui.joystickBase?.removeEventListener('pointercancel', endJoystick);
       ui.joystickBase?.removeEventListener('lostpointercapture', endJoystick);
     };
-  }, [gameStarted, isJoined]);
+  }, [gameStarted]);
 
   return (
     <div className="app-container">
@@ -3595,14 +4469,6 @@ function initialState(): GameState {
             <div className="health-container-top">
               <div id="healthFill" className="hp-bar-fill" style={{ width: '100%' }} />
             </div>
-            {isJoined && (
-              <div className="flex items-center gap-2 px-2 py-0.5 bg-black/40 rounded-full border border-blue-500/30 w-fit">
-                <div className={`w-1.5 h-1.5 rounded-full ${isHost ? 'bg-yellow-400' : 'bg-blue-400'} animate-pulse`} />
-                <span className="text-[10px] text-white/80 font-mono uppercase tracking-wider">
-                  {isHost ? 'Host' : 'Client'} • Sala {roomId}
-                </span>
-              </div>
-            )}
           </div>
           
           <div className="hud-main-row">
@@ -3664,18 +4530,20 @@ function initialState(): GameState {
           </div>
         </div>
 
-        {/* Room Selection Overlay */}
-      {!isJoined && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
-          <div className="dq-window w-full max-w-md p-8 text-center space-y-6 shadow-2xl border-4 border-blue-400/30">
-            {!gameStarted ? (
-              <div className="space-y-6">
+        {/* Title Overlay */}
+        {!gameStarted && (
+          <div id="titleOverlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950 animate-bg-pulse p-4">
+            <div className="dq-window w-full max-w-md p-8 text-center space-y-6 shadow-2xl border-4 border-blue-400/30 backdrop-blur-sm bg-blue-900/40 relative overflow-hidden">
+              <div className="absolute -top-24 -left-24 w-48 h-48 bg-blue-500/10 rounded-full blur-3xl" />
+              <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl" />
+              
+              <div className="space-y-6 relative z-10">
                 <div className="flex justify-center mb-4">
-                  <div className="p-6 bg-blue-500/20 rounded-full border-4 border-blue-400/50 shadow-[0_0_20px_rgba(96,165,250,0.3)]">
+                  <div className="p-6 bg-blue-500/20 rounded-full border-4 border-blue-400/50 shadow-[0_0_30px_rgba(96,165,250,0.4)] animate-float">
                     <Play className="w-16 h-16 text-blue-400 fill-blue-400/20" />
                   </div>
                 </div>
-                <h1 className="text-4xl font-black text-white tracking-tighter uppercase italic">Nobre na Floresta</h1>
+                <h1 className="text-4xl font-black text-white tracking-tighter uppercase italic animate-glow">As Crônicas de Hero</h1>
                 <p className="text-blue-200/70 text-sm leading-relaxed">
                   Defenda seu acampamento dos monstros da floresta!<br/>
                   Colete recursos de dia e sobreviva à noite.
@@ -3683,10 +4551,11 @@ function initialState(): GameState {
                 
                 <button 
                   onClick={() => setGameStarted(true)}
-                  className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xl rounded-xl shadow-[0_6px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-3 group"
+                  className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xl rounded-xl shadow-[0_6px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-3 group relative overflow-hidden"
                 >
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:animate-[shimmer_2s_infinite]" />
                   <Play className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                  INICIAR JOGO
+                  INICIAR JORNADA
                 </button>
 
                 <div className="pt-4 border-t border-white/10 flex justify-center gap-6 opacity-40 text-[10px] uppercase tracking-widest font-bold text-blue-300">
@@ -3695,121 +4564,9 @@ function initialState(): GameState {
                   <span>1-3: CONSTRUIR</span>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-                    <Users className="w-6 h-6 text-blue-400" />
-                    Multiplayer
-                  </h2>
-                  <div className="flex items-center gap-2 px-3 py-1 bg-white/5 rounded-full border border-white/10">
-                    <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
-                    <span className="text-[10px] font-bold text-blue-200/50 uppercase tracking-tighter">
-                      {isConnected ? 'Online' : 'Offline'}
-                    </span>
-                  </div>
-                </div>
-                
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[10px] font-black text-blue-400 uppercase tracking-[0.2em] text-left">Salas Ativas</p>
-                      <button 
-                        onClick={() => socketRef.current?.emit('request-rooms')}
-                        className="p-1.5 hover:bg-white/10 rounded-full transition-all group active:scale-90"
-                        title="Atualizar Lista"
-                      >
-                        <Globe className="w-4 h-4 text-blue-400/50 group-hover:text-blue-400 group-hover:rotate-180 transition-all duration-700" />
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar min-h-[100px]">
-                      {roomsList.length > 0 ? (
-                        roomsList.map((room) => (
-                          <button
-                            key={room.id}
-                            onClick={() => {
-                              setRoomId(room.id);
-                              socketRef.current?.emit('join-room', room.id);
-                            }}
-                            className="flex items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl hover:bg-blue-500/15 hover:border-blue-400/40 transition-all group text-left"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
-                              <div>
-                                <span className="text-white font-bold block">Sala {room.id}</span>
-                                <span className="text-[10px] text-blue-300/40 uppercase font-black">Clique para entrar</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 px-2 py-1 bg-blue-500/10 rounded-lg text-blue-300 font-bold text-xs">
-                              <Users className="w-3 h-3" />
-                              <span>{room.playerCount}</span>
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <div className="flex flex-col items-center justify-center p-8 bg-white/5 border border-dashed border-white/10 rounded-xl text-center space-y-2">
-                          <Globe className="w-8 h-8 text-white/5" />
-                          <p className="text-blue-300/30 text-xs font-medium italic">Nenhuma sala ativa encontrada</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-4 pt-4 border-t border-white/10">
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="ID DA SALA..."
-                        value={roomId}
-                        onChange={(e) => setRoomId(e.target.value)}
-                        className="flex-1 bg-black/40 border-2 border-blue-900/50 rounded-xl px-4 py-3 text-white font-bold placeholder:text-blue-900/50 focus:border-blue-500/50 outline-none transition-all uppercase"
-                      />
-                      <button
-                        onClick={() => {
-                          const randomId = Math.floor(Math.random() * 9000 + 1000).toString();
-                          setRoomId(randomId);
-                          socketRef.current?.emit('join-room', randomId);
-                        }}
-                        className="px-5 py-3 bg-blue-600/20 border-2 border-blue-500/30 rounded-xl text-blue-400 hover:bg-blue-600/30 hover:border-blue-400 transition-all flex items-center gap-2 font-bold"
-                        title="Criar Nova Sala"
-                      >
-                        <Plus className="w-5 h-5" />
-                        NOVA
-                      </button>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        onClick={() => {
-                          if (roomId.trim()) {
-                            socketRef.current?.emit('join-room', roomId.toUpperCase());
-                          } else {
-                            alert('Digite um ID de sala.');
-                          }
-                        }}
-                        className="py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl shadow-[0_4px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2 group"
-                      >
-                        <LogIn className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                        ENTRAR
-                      </button>
-                      <button
-                        onClick={() => {
-                          const soloId = "SOLO-" + Math.floor(Math.random() * 100000);
-                          setRoomId(soloId);
-                          setIsJoined(true);
-                        }}
-                        className="py-4 bg-zinc-800 hover:bg-zinc-700 text-white font-black rounded-xl shadow-[0_4px_0_rgb(39,39,42)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-2"
-                      >
-                        JOGAR SOLO
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
         <div id="gameOverOverlay" className="overlay" style={{ display: 'none' }}>
           <div className="card dq-window">
@@ -3825,6 +4582,34 @@ function initialState(): GameState {
               </div>
             </div>
             <button id="restartBtn" className="btn-start">TENTAR NOVAMENTE</button>
+          </div>
+        </div>
+
+        {/* Reward Choice Overlay */}
+        <div id="rewardOverlay" className="overlay" style={{ display: 'none', zIndex: 200 }}>
+          <div className="card dq-window p-6 text-center max-w-sm w-full mx-4">
+            <div className="flex justify-center mb-4">
+              <div className="p-4 bg-yellow-500/20 rounded-full border-2 border-yellow-400/50 animate-bounce">
+                <Trophy className="w-10 h-10 text-yellow-400" />
+              </div>
+            </div>
+            <h2 className="text-2xl font-black text-yellow-400 mb-2 tracking-tighter uppercase italic">VITÓRIA SOBRE O CHEFE!</h2>
+            <p className="text-blue-200/70 text-xs mb-6 uppercase tracking-widest font-bold">Escolha sua bênção eterna:</p>
+            
+            <div className="flex flex-col gap-3">
+              <button id="rewardAtk" className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-black rounded-xl shadow-[0_4px_0_rgb(153,27,27)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-3 group">
+                <Sword className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                FORÇA (+20% DANO)
+              </button>
+              <button id="rewardDef" className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl shadow-[0_4px_0_rgb(30,58,138)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-3 group">
+                <Shield className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                RESISTÊNCIA (+20% VIDA)
+              </button>
+              <button id="rewardEco" className="w-full py-4 bg-green-600 hover:bg-green-500 text-white font-black rounded-xl shadow-[0_4px_0_rgb(22,101,52)] active:translate-y-1 active:shadow-none transition-all flex items-center justify-center gap-3 group">
+                <Pickaxe className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                PROSPERIDADE (+20% COLETA)
+              </button>
+            </div>
           </div>
         </div>
       </div>

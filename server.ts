@@ -1,23 +1,9 @@
 import express from "express";
-import { createServer } from "http";
-import { Server } from "socket.io";
 import path from "path";
-import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const httpServer = createServer(app);
-  const io = new Server(httpServer, {
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"],
-    },
-  });
-
   const PORT = 3000;
 
   // Vite middleware for development
@@ -35,133 +21,7 @@ async function startServer() {
     });
   }
 
-  // Multiplayer logic
-  const rooms: Record<string, { host: string; players: string[] }> = {};
-
-  function broadcastRooms(targetSocket?: any) {
-    const roomList = Object.keys(rooms).map(id => ({
-      id,
-      playerCount: rooms[id].players.length
-    }));
-    
-    console.log(`Broadcasting rooms list (${roomList.length} rooms) to ${targetSocket ? 'socket ' + targetSocket.id : 'everyone'}`);
-    if (roomList.length > 0) {
-      console.log('Active rooms:', JSON.stringify(roomList));
-    }
-    
-    if (targetSocket) {
-      targetSocket.emit("rooms-list", roomList);
-    } else {
-      io.emit("rooms-list", roomList);
-    }
-  }
-
-  function leaveAllRooms(socketId: string) {
-    let changed = false;
-    for (const roomId in rooms) {
-      const room = rooms[roomId];
-      const index = room.players.indexOf(socketId);
-      if (index !== -1) {
-        room.players.splice(index, 1);
-        console.log(`User ${socketId} left room ${roomId}. Remaining: ${room.players.length}`);
-        io.to(roomId).emit("player-left", socketId);
-        
-        // If host left, assign a new host
-        if (room.host === socketId && room.players.length > 0) {
-          room.host = room.players[0];
-          console.log(`New host for room ${roomId}: ${room.host}`);
-          io.to(room.host).emit("became-host");
-        }
-
-        if (room.players.length === 0) {
-          console.log(`Room ${roomId} deleted (no players left)`);
-          delete rooms[roomId];
-        }
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  // Periodic broadcast of rooms to everyone in the lobby
-  setInterval(() => {
-    broadcastRooms();
-  }, 5000);
-
-  io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-    
-    // Send current rooms specifically to the new user after a short delay
-    // to ensure their listeners are ready.
-    setTimeout(() => {
-      broadcastRooms(socket);
-    }, 500);
-
-    socket.on("request-rooms", () => {
-      broadcastRooms(socket);
-    });
-
-    socket.on("join-room", (roomId) => {
-      if (!roomId) {
-        console.log(`User ${socket.id} attempted to join with empty roomId`);
-        return;
-      }
-      console.log(`User ${socket.id} joining room: "${roomId}"`);
-      
-      // Leave previous rooms first
-      leaveAllRooms(socket.id);
-
-      socket.join(roomId);
-      if (!rooms[roomId]) {
-        rooms[roomId] = { host: socket.id, players: [] };
-        console.log(`Room "${roomId}" created. Host: ${socket.id}`);
-      }
-      
-      if (!rooms[roomId].players.includes(socket.id)) {
-        rooms[roomId].players.push(socket.id);
-      }
-      
-      // Notify the player if they are the host
-      socket.emit("room-joined", { 
-        isHost: rooms[roomId].host === socket.id,
-        roomId 
-      });
-
-      // Notify others in the room
-      socket.to(roomId).emit("player-joined", socket.id);
-      console.log(`User ${socket.id} joined room "${roomId}". Total players: ${rooms[roomId].players.length}`);
-      
-      // Broadcast updated room list to everyone
-      broadcastRooms();
-    });
-
-    socket.on("player-update", (data) => {
-      const { roomId, ...playerData } = data;
-      socket.to(roomId).emit("player-moved", { id: socket.id, ...playerData });
-    });
-
-    socket.on("player-attack", (data) => {
-      const { roomId, ...attackData } = data;
-      socket.to(roomId).emit("remote-attack", { id: socket.id, ...attackData });
-    });
-
-    socket.on("sync-game-state", (data) => {
-      const { roomId, ...gameState } = data;
-      // Only the host should sync the game state
-      if (rooms[roomId]?.host === socket.id) {
-        socket.to(roomId).emit("game-state-synced", gameState);
-      }
-    });
-
-    socket.on("disconnect", () => {
-      console.log("User disconnected:", socket.id);
-      if (leaveAllRooms(socket.id)) {
-        broadcastRooms();
-      }
-    });
-  });
-
-  httpServer.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
