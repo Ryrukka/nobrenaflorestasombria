@@ -48,7 +48,9 @@ export default function App() {
       damageMult: 1.0, healthMult: 1.0, resourceMult: 1.0
     },
     campfire: { x: 700, y: 550, hp: 100, maxHp: 100, level: 1, radius: 20 },
-    pulse: 0
+    pulse: 0,
+    hitStop: 0,
+    cameraShake: 0
   });
 
   useEffect(() => {
@@ -406,6 +408,8 @@ export default function App() {
       rewardAtk: document.getElementById('rewardAtk'),
       rewardDef: document.getElementById('rewardDef'),
       rewardEco: document.getElementById('rewardEco'),
+      waveProgressFill: document.getElementById('waveProgressFill'),
+      vignette: document.getElementById('vignette'),
     };
 
     const keys: Record<string, boolean> = {};
@@ -423,6 +427,7 @@ export default function App() {
       timeOfDay: number;
       cameraShake: number;
       pulse: number;
+      hitStop: number;
       effects: any[];
       particles: any[];
       drops: any[];
@@ -646,6 +651,7 @@ function initialState(): GameState {
         timeOfDay: 0.42,
         cameraShake: 0,
         pulse: 0,
+        hitStop: 0,
         effects: [] as any[],
         particles: [] as any[],
         drops: [] as any[],
@@ -1238,6 +1244,15 @@ function initialState(): GameState {
         moving = true;
         if (Math.abs(xAxis) > Math.abs(yAxis)) state.player.facing = xAxis < 0 ? 'left' : 'right';
         else state.player.facing = yAxis < 0 ? 'up' : 'down';
+
+        // Walk dust
+        if (state.frame % 8 === 0) {
+          state.particles.push({
+            x: state.player.x, y: state.player.y + 10,
+            vx: -xAxis * 1, vy: -0.5,
+            life: 0.6, size: rand(2, 4), color: 'rgba(255,255,255,0.3)', type: 'cloud'
+          });
+        }
       }
 
       state.player.x = clamp(state.player.x, 22, MAP_WIDTH - 22);
@@ -1358,11 +1373,14 @@ function initialState(): GameState {
             // Only apply actual damage if host or if we want local prediction
             enemy.hp -= dmg;
             enemy.hitFlash = 5;
+            
+            if (isCrit) state.hitStop = 4; // Hit stop on crit
 
             // Boss damage feedback
             if (enemy.type === 'boss') {
               addParticles(enemy.x, enemy.y, '#ffd700', 12);
               triggerShake(isCrit ? 12 : 6);
+              state.hitStop = 6; // More hit stop for boss
             }
             
             // Knockback
@@ -2726,6 +2744,10 @@ function initialState(): GameState {
     }
 
     function updateGame() {
+      if (state.hitStop > 0) {
+        state.hitStop--;
+        return;
+      }
       state.frame++;
       if (state.status !== 'playing') return;
 
@@ -2755,6 +2777,14 @@ function initialState(): GameState {
             triggerShake(12);
           } else {
             showQuestMessage('Onda finalizada! Prepare-se para a próxima.', 3000);
+            // Victory celebration juice
+            for (let i = 0; i < 30; i++) {
+              state.particles.push({
+                x: state.player.x + rand(-100, 100), y: state.player.y + rand(-100, 100),
+                vx: rand(-3, 3), vy: rand(-5, -2),
+                life: 1.5, size: rand(2, 5), color: ['#fff', '#ffd700', '#4fc3f7'][Math.floor(Math.random() * 3)]
+              });
+            }
           }
         } else {
           // Preparation ended, start combat
@@ -3008,7 +3038,9 @@ function initialState(): GameState {
 
       // Light Radius Ring (Visual Protection Area)
       const levelData = CAMPFIRE_LEVELS.find(l => l.level === level) || CAMPFIRE_LEVELS[0];
-      const lightRadius = levelData.lightRadius;
+      const breathing = Math.sin(state.frame * 0.05) * 12;
+      const lightRadius = levelData.lightRadius + breathing;
+      
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 200, 100, 0.12)';
       ctx.setLineDash([15, 15]);
@@ -3653,13 +3685,22 @@ function initialState(): GameState {
       if (p.hitFlash > 0) p.hitFlash--;
       
       const bob = p.frame === 1 ? 2 : 0;
+      const isMoving = joystick.active || keys['w'] || keys['s'] || keys['a'] || keys['d'] || keys['arrowup'] || keys['arrowdown'] || keys['arrowleft'] || keys['arrowright'];
+      const squash = isMoving ? 1 + Math.sin(state.frame * 0.2) * 0.05 : 1;
+      const stretch = isMoving ? 1 - Math.sin(state.frame * 0.2) * 0.05 : 1;
       
       // Shadow
-      drawShadow(p.x, p.y + 16, 14);
+      drawShadow(p.x, p.y + 16, 14 * squash);
+
+      ctx.save();
+      ctx.translate(p.x, p.y + bob);
+      ctx.scale(squash, stretch);
+      ctx.translate(-p.x, -(p.y + bob));
 
       if (p.hitFlash > 0) {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(p.x - 12, p.y - 22 + bob, 24, 50);
+        ctx.restore();
         return;
       }
 
@@ -3789,6 +3830,7 @@ function initialState(): GameState {
         
         ctx.restore();
       }
+      ctx.restore();
     }
 
     function drawOtherPlayer(p: any) {
@@ -4157,7 +4199,12 @@ function initialState(): GameState {
           ctx.fillStyle = e.color;
           ctx.font = e.isCrit ? 'bold 20px Arial' : 'bold 14px Arial';
           ctx.textAlign = 'center';
-          ctx.fillText(e.text, e.x, e.y);
+          
+          // Pop animation for text
+          const pop = Math.sin((1 - e.life) * Math.PI * 2) * 0.3 + 1;
+          ctx.translate(e.x, e.y);
+          ctx.scale(pop, pop);
+          ctx.fillText(e.text, 0, 0);
         }
         ctx.restore();
       }
@@ -4408,6 +4455,32 @@ function initialState(): GameState {
 
       drawForestEdges();
       drawDayNight();
+
+      // UI Updates (Juice)
+      if (ui.waveProgressFill) {
+        const totalWaveTime = state.wave % 5 === 0 ? 5400 : 3600;
+        const progress = state.isWaveActive ? (1 - state.waveTimer / totalWaveTime) * 100 : 0;
+        ui.waveProgressFill.style.width = `${progress}%`;
+        
+        if (state.isWaveActive) {
+          // Intensity feedback: turns red and glows more as wave ends
+          const isEnding = progress > 80;
+          ui.waveProgressFill.style.backgroundColor = isEnding ? '#ff5252' : '#4fc3f7';
+          ui.waveProgressFill.style.boxShadow = isEnding ? '0 0 15px #ff5252' : '0 0 10px #4fc3f7';
+        } else {
+          ui.waveProgressFill.style.backgroundColor = '#333';
+          ui.waveProgressFill.style.boxShadow = 'none';
+        }
+      }
+
+      if (ui.vignette) {
+        const hpPercent = state.player.health / state.player.maxHealth;
+        if (hpPercent < 0.3) {
+          ui.vignette.classList.add('vignette-low-hp');
+        } else {
+          ui.vignette.classList.remove('vignette-low-hp');
+        }
+      }
     }
 
     function gameLoop() {
@@ -4462,12 +4535,16 @@ function initialState(): GameState {
     <div className="app-container">
       <div className="game-wrap">
         <canvas ref={canvasRef} width={860} height={640} />
+        <div id="vignette" className="vignette-overlay" />
 
         {/* New Responsive HUD */}
         <div className="hud-top">
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-0">
             <div className="health-container-top">
               <div id="healthFill" className="hp-bar-fill" style={{ width: '100%' }} />
+            </div>
+            <div className="wave-progress-container">
+              <div id="waveProgressFill" className="wave-progress-fill" style={{ width: '0%' }} />
             </div>
           </div>
           
